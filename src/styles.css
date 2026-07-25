@@ -1,0 +1,57 @@
+@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap");
+@import "tailwindcss";
+
+:root {
+  font-family: "Noto Sans Thai", "Segoe UI", system-ui, sans-serif;
+  color: #1f2937;
+  background: #f3f5f9;
+  --brand-red: #b91c1c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: #f3f5f9;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.ant-menu-inline .ant-menu-item-selected {
+  background: #fef2f2 !important;
+  color: #b91c1c !important;
+  font-weight: 600;
+}
+
+.app-sidebar .ant-menu-dark .ant-menu-item {
+  color: #cbd5e1 !important;
+  border-radius: 10px !important;
+  margin-inline: 0 !important;
+}
+
+.app-sidebar .ant-menu-dark .ant-menu-item:hover {
+  background: rgb(255 255 255 / 0.07) !important;
+  color: #ffffff !important;
+}
+
+.app-sidebar .ant-menu-dark .ant-menu-item-selected {
+  background: rgb(185 28 28 / 0.28) !important;
+  color: #ffffff !important;
+  box-shadow: inset 3px 0 0 #ef4444;
+}
+
+.app-sidebar .ant-menu-inline-collapsed {
+  width: 100% !important;
+}
+
+.app-sidebar .ant-menu-inline-collapsed .ant-menu-item {
+  padding-inline: calc(50% - 14px) !important;
+  display: flex !important;
+  justify-content: center;
+}
