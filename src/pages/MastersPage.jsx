@@ -4,7 +4,7 @@ import { MasterPanel } from "../components/masters/MasterPanel";
 
 const TABS = [
   { key: "companies", label: "บริษัท", hasCompany: false },
-  { key: "customer-aliases", label: "ชื่อลูกค้า", hasCompany: true },
+  { key: "customer-aliases", label: "ชื่อเล่น", hasCompany: true },
   { key: "departments", label: "แผนก", hasCompany: false },
   { key: "machines", label: "เครื่องจักร", hasCompany: false },
   { key: "problems", label: "ปัญหา", hasCompany: false },

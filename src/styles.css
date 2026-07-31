@@ -29,6 +29,19 @@ body {
   font-weight: 600;
 }
 
+.app-sidebar .ant-menu-dark .ant-menu-item-group {
+  margin-bottom: 10px;
+}
+
+.app-sidebar .ant-menu-dark .ant-menu-item-group-title {
+  padding: 8px 12px 6px !important;
+  color: #64748b !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .app-sidebar .ant-menu-dark .ant-menu-item {
   color: #cbd5e1 !important;
   border-radius: 10px !important;
@@ -46,6 +59,11 @@ body {
   box-shadow: inset 3px 0 0 #ef4444;
 }
 
+.app-sidebar .ant-menu-dark .ant-menu-item-disabled {
+  color: #475569 !important;
+  opacity: 0.72;
+}
+
 .app-sidebar .ant-menu-inline-collapsed {
   width: 100% !important;
 }
@@ -54,4 +72,9 @@ body {
   padding-inline: calc(50% - 14px) !important;
   display: flex !important;
   justify-content: center;
+}
+
+.complaint-required-select .ant-select-selector {
+  border-color: #fca5a5 !important;
+  background: rgb(254 242 242 / 0.4) !important;
 }

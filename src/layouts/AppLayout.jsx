@@ -3,7 +3,9 @@ import { Avatar, Button, Drawer, Menu, Tooltip } from "antd";
 import {
   DashboardOutlined,
   DatabaseOutlined,
+  FormOutlined,
   FileSearchOutlined,
+  HistoryOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
   MenuOutlined,
@@ -12,11 +14,50 @@ import {
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
 
-const NAV = [
-  { key: "/dashboard", icon: <DashboardOutlined />, label: "Dashboard Reject" },
-  { key: "/rejects", icon: <FileSearchOutlined />, label: "รายการ Reject" },
-  { key: "/masters", icon: <DatabaseOutlined />, label: "Master Data" },
+const NAV_GROUPS = [
+  {
+    key: "reject",
+    label: "Reject",
+    children: [
+      { key: "/dashboard", icon: <DashboardOutlined />, label: "Dashboard Reject" },
+      { key: "/rejects", icon: <FileSearchOutlined />, label: "รายการ Reject" },
+      { key: "/reject-form", icon: <FormOutlined />, label: "ฟอร์ม Reject" },
+    ],
+  },
+  {
+    key: "complaint",
+    label: "Complaint",
+    children: [
+      {
+        key: "/complaint-dashboard",
+        icon: <DashboardOutlined />,
+        label: "Dashboard Complaint",
+        disabled: true,
+      },
+      {
+        key: "/complaints",
+        icon: <FileSearchOutlined />,
+        label: "รายการ Complaint",
+        disabled: true,
+      },
+      {
+        key: "/complaint-form",
+        icon: <FormOutlined />,
+        label: "ฟอร์ม Complaint",
+      },
+    ],
+  },
+  {
+    key: "system",
+    label: "ระบบ",
+    children: [
+      { key: "/activity-logs", icon: <HistoryOutlined />, label: "Activity Log" },
+      { key: "/masters", icon: <DatabaseOutlined />, label: "Master Data" },
+    ],
+  },
 ];
+
+const NAV_ITEMS = NAV_GROUPS.flatMap((group) => group.children);
 
 const SIDEBAR_EXPANDED = 248;
 const SIDEBAR_COLLAPSED = 76;
@@ -48,24 +89,18 @@ function SidebarContent({
         {!collapsed ? (
           <div className="min-w-0">
             <div className="text-[13px] leading-4 font-semibold text-white">
-              Complaint
+              Complaint & Reject
               <br />
               Management System
             </div>
-            <div className="mt-1 flex items-center gap-2 text-[10px] tracking-[0.08em] text-red-300">
-              <span>LEE FIBREBOARD</span>
-              <span className="tracking-normal text-slate-500">Reject</span>
+            <div className="mt-1 text-[10px] tracking-[0.08em] text-red-300">
+              LEE FIBREBOARD
             </div>
           </div>
         ) : null}
       </div>
 
       <div className={`flex-1 overflow-y-auto py-4 ${collapsed ? "px-2" : "px-3"}`}>
-        {!collapsed ? (
-          <div className="mb-2 px-3 text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
-            เมนูหลัก
-          </div>
-        ) : null}
         <Menu
           theme="dark"
           mode="inline"
@@ -73,12 +108,18 @@ function SidebarContent({
           selectedKeys={[selectedKey]}
           className="border-none !bg-transparent"
           style={{ borderInlineEnd: "none" }}
-          items={NAV.map((item) => ({
-            key: item.key,
-            icon: item.icon,
-            label: item.label,
-            title: item.label,
-            onClick: () => onNavigate(item.key),
+          items={NAV_GROUPS.map((group) => ({
+            type: "group",
+            key: group.key,
+            label: group.label,
+            children: group.children.map((item) => ({
+              key: item.key,
+              icon: item.icon,
+              label: item.label,
+              title: item.disabled ? `${item.label} (เร็วๆ นี้)` : item.label,
+              disabled: Boolean(item.disabled),
+              onClick: item.disabled ? undefined : () => onNavigate(item.key),
+            })),
           }))}
         />
       </div>
@@ -120,7 +161,11 @@ function SidebarContent({
                 <div className="truncate text-sm font-medium text-slate-100">
                   {displayName}
                 </div>
-                <div className="text-xs text-slate-400">{user?.role || "-"}</div>
+                <div className="text-xs text-slate-400">
+                  {user?.department
+                    ? `แผนก ${user.department} · ${user?.role || "-"}`
+                    : user?.role || "-"}
+                </div>
               </div>
               <Button
                 type="text"
@@ -172,7 +217,7 @@ export function AppLayout() {
   const sidebarWidth = collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
 
   const title = useMemo(() => {
-    return NAV.find((item) => item.key === location.pathname)?.label || "CMS";
+    return NAV_ITEMS.find((item) => item.key === location.pathname)?.label || "CMS";
   }, [location.pathname]);
 
   const onLogout = async () => {

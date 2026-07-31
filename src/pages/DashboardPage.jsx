@@ -17,6 +17,7 @@ import {
 import {
   AlertOutlined,
   BankOutlined,
+  BarChartOutlined,
   ExportOutlined,
   FilterOutlined,
   FileSearchOutlined,
@@ -39,6 +40,9 @@ import {
 import { dashboardApi } from "../services/api";
 import { useSession } from "../hooks/useSession";
 import { DashboardFilterModal } from "../components/dashboard/DashboardFilterModal";
+import { MachineComparisonPanel } from "../components/dashboard/MachineComparisonPanel";
+import { colorForKey } from "../utils/colors";
+import { money, pct, qty } from "../utils/format";
 
 const PERIODS = [
   { value: "day", label: "วันนี้" },
@@ -49,45 +53,6 @@ const PERIODS = [
 
 const BAR_COLORS = ["#b91c1c", "#dc2626", "#ea580c", "#d97706", "#64748b", "#334155", "#7c2d12"];
 const PIE_COLORS = ["#b91c1c", "#e11d48", "#ea580c", "#f59e0b", "#64748b"];
-/** Distinct categorical colors for stacked machine bars — easy to tell apart */
-const STACK_FALLBACK = ["#2563eb", "#f97316", "#10b981", "#a855f7", "#64748b", "#06b6d4", "#e11d48"];
-const MACHINE_COLOR_MAP = {
-  BHS: "#f97316", // orange
-  YUELI: "#2563eb", // blue
-  ISOWA: "#10b981", // green
-  CT: "#a855f7", // purple
-};
-
-function money(value) {
-  return Number(value || 0).toLocaleString("th-TH", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  });
-}
-
-function qty(value, digits = 0) {
-  return Number(value || 0).toLocaleString("th-TH", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
-
-function pct(value, digits = 2) {
-  return `${Number(value || 0).toFixed(digits)}%`;
-}
-
-function colorForKey(key, fallbackIndex = 0) {
-  const name = String(key || "").trim();
-  if (!name || name === "count") return STACK_FALLBACK[fallbackIndex % STACK_FALLBACK.length];
-  if (name.includes("ไม่ระบุ")) return "#64748b";
-  const upper = name.toUpperCase();
-  if (MACHINE_COLOR_MAP[upper]) return MACHINE_COLOR_MAP[upper];
-  const hit = Object.entries(MACHINE_COLOR_MAP).find(([known]) => upper.includes(known));
-  if (hit) return hit[1];
-  let hash = 0;
-  for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-  return STACK_FALLBACK[hash % STACK_FALLBACK.length];
-}
 
 function SectionTitle({ children }) {
   return (
@@ -99,7 +64,7 @@ function SectionTitle({ children }) {
   );
 }
 
-function Panel({ title, subtitle, children, className = "" }) {
+function Panel({ title, subtitle, action, children, className = "" }) {
   return (
     <Card
       className={`h-full rounded-xl shadow-sm ${className}`}
@@ -112,9 +77,12 @@ function Panel({ title, subtitle, children, className = "" }) {
         },
       }}
     >
-      <div className="mb-4 min-h-[44px] shrink-0">
-        <div className="text-sm font-semibold text-slate-800">{title}</div>
-        {subtitle ? <div className="mt-0.5 text-[11px] leading-4 text-slate-400">{subtitle}</div> : null}
+      <div className="mb-4 flex min-h-[44px] shrink-0 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-slate-800">{title}</div>
+          {subtitle ? <div className="mt-0.5 text-[11px] leading-4 text-slate-400">{subtitle}</div> : null}
+        </div>
+        {action ? <div className="shrink-0">{action}</div> : null}
       </div>
       <div className="flex min-h-0 flex-1 flex-col">{children}</div>
     </Card>
@@ -330,32 +298,65 @@ function RejectImpactPanel({ kpi }) {
 
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div className="rounded-xl border border-red-100 bg-gradient-to-br from-red-50 to-white px-4 py-3">
-          <div className="text-[11px] font-medium text-red-600/80">จำนวนแผ่นที่ Reject</div>
-          <div className="mt-0.5 text-2xl font-bold tracking-tight text-slate-900">
-            {qty(claimSheets, 0)}
+      <div className="grid gap-3 lg:grid-cols-3">
+        <div className="rounded-xl border border-red-100 bg-gradient-to-br from-red-50 to-white p-4">
+          <div className="text-xs font-semibold text-red-700">จำนวนแผ่นที่ Reject</div>
+          <div className="mt-1 text-2xl font-bold tracking-tight text-slate-900">
+            {qty(claimSheets, 0)} <span className="text-sm font-semibold text-slate-500">แผ่น</span>
           </div>
-          <div className="mt-0.5 text-[11px] text-slate-400">
-            จากยอดส่งจริง {qty(shipSheets, 0)} แผ่น · {pct(sheetPct, 2)}
+          <div className="mt-3 grid grid-cols-2 gap-2 border-t border-red-100 pt-3">
+            <div className="rounded-lg bg-white/80 px-2.5 py-2">
+              <div className="text-[10px] font-medium text-slate-500">ยอดส่งจริง</div>
+              <div className="mt-0.5 text-sm font-bold tabular-nums text-slate-800">
+                {qty(shipSheets, 0)} <span className="text-[10px] font-medium">แผ่น</span>
+              </div>
+            </div>
+            <div className="rounded-lg bg-red-100/70 px-2.5 py-2">
+              <div className="text-[10px] font-medium text-red-700">คิดเป็นสัดส่วน</div>
+              <div className="mt-0.5 text-sm font-bold tabular-nums text-red-700">
+                {pct(sheetPct, 2)}
+              </div>
+            </div>
           </div>
         </div>
-        <div className="rounded-xl border border-amber-100 bg-gradient-to-br from-amber-50 to-white px-4 py-3">
-          <div className="text-[11px] font-medium text-amber-700/80">คิดเป็นน้ำหนัก</div>
-          <div className="mt-0.5 text-2xl font-bold tracking-tight text-slate-900">
+        <div className="rounded-xl border border-amber-100 bg-gradient-to-br from-amber-50 to-white p-4">
+          <div className="text-xs font-semibold text-amber-700">สัดส่วน Reject ตามน้ำหนัก</div>
+          <div className="mt-1 text-2xl font-bold tracking-tight text-slate-900">
             {pct(weightPct, 2)}
           </div>
-          <div className="mt-0.5 text-[11px] text-slate-400">
-            เคลม {qty(rejectWeight, 1)} / ส่ง {qty(shipWeight, 1)} KG
+          <div className="mt-3 grid grid-cols-2 gap-2 border-t border-amber-100 pt-3">
+            <div className="rounded-lg bg-amber-100/60 px-2.5 py-2">
+              <div className="text-[10px] font-medium text-amber-800">น้ำหนักเคลม</div>
+              <div className="mt-0.5 text-sm font-bold tabular-nums text-slate-800">
+                {qty(rejectWeight, 1)} <span className="text-[10px] font-medium">KG</span>
+              </div>
+            </div>
+            <div className="rounded-lg bg-white/80 px-2.5 py-2">
+              <div className="text-[10px] font-medium text-slate-500">น้ำหนักส่งจริง</div>
+              <div className="mt-0.5 text-sm font-bold tabular-nums text-slate-800">
+                {qty(shipWeight, 1)} <span className="text-[10px] font-medium">KG</span>
+              </div>
+            </div>
           </div>
         </div>
-        <div className="rounded-xl border border-orange-100 bg-gradient-to-br from-orange-50 to-white px-4 py-3">
-          <div className="text-[11px] font-medium text-orange-700/80">คิดเป็นมูลค่า</div>
-          <div className="mt-0.5 text-2xl font-bold tracking-tight text-slate-900">
+        <div className="rounded-xl border border-orange-100 bg-gradient-to-br from-orange-50 to-white p-4">
+          <div className="text-xs font-semibold text-orange-700">สัดส่วน Reject ตามมูลค่า</div>
+          <div className="mt-1 text-2xl font-bold tracking-tight text-slate-900">
             {pct(valuePct, 2)}
           </div>
-          <div className="mt-0.5 text-[11px] text-slate-400">
-            เคลม {money(rejectAmount)} / ส่ง {money(shipAmount)} บาท
+          <div className="mt-3 grid grid-cols-2 gap-2 border-t border-orange-100 pt-3">
+            <div className="rounded-lg bg-orange-100/60 px-2.5 py-2">
+              <div className="text-[10px] font-medium text-orange-800">มูลค่าเคลม</div>
+              <div className="mt-0.5 text-sm font-bold tabular-nums text-slate-800">
+                {money(rejectAmount)} <span className="text-[10px] font-medium">บาท</span>
+              </div>
+            </div>
+            <div className="rounded-lg bg-white/80 px-2.5 py-2">
+              <div className="text-[10px] font-medium text-slate-500">มูลค่าส่งจริง</div>
+              <div className="mt-0.5 text-sm font-bold tabular-nums text-slate-800">
+                {money(shipAmount)} <span className="text-[10px] font-medium">บาท</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -790,6 +791,170 @@ function RejectDetailModal({ open, title, subtitle, loading, error, rows, onClos
   );
 }
 
+function comparisonPeriodLabel(period, grain) {
+  const date = new Date(`${period.from}T00:00:00`);
+  if (grain === "month") {
+    return date.toLocaleDateString("th-TH", { month: "short", year: "2-digit" });
+  }
+  if (grain === "week") {
+    const end = new Date(`${period.to}T00:00:00`);
+    const fromText = date.toLocaleDateString("th-TH", { day: "numeric", month: "short" });
+    const toText = end.toLocaleDateString("th-TH", {
+      day: "numeric",
+      month: "short",
+      year: "2-digit",
+    });
+    return `${fromText}–${toText}`;
+  }
+  return date.toLocaleDateString("th-TH", {
+    day: "numeric",
+    month: "short",
+    year: "2-digit",
+  });
+}
+
+function TopComparisonModal({
+  open,
+  type,
+  previousPeriods,
+  data,
+  loading,
+  error,
+  onPeriodsChange,
+  onClose,
+}) {
+  const periods = data?.periods || [];
+  const items = data?.items || [];
+  const typeLabel = type === "companies" ? "บริษัทลูกค้า" : "ปัญหาที่พบ";
+  const grainLabel = data?.grain === "month" ? "เดือน" : data?.grain === "week" ? "สัปดาห์" : "วัน";
+  const tableData = items.map((item, index) => {
+    const row = {
+      key: item.id,
+      rank: index + 1,
+      name: item.name,
+      total_count: Number(item.total_count || 0),
+      total_reject_amount: Number(item.total_reject_amount || 0),
+    };
+    for (const value of item.values || []) row[value.period_key] = value;
+    return row;
+  });
+  const comparisonColumns = [
+    {
+      title: "Top 5",
+      dataIndex: "name",
+      key: "name",
+      fixed: "left",
+      width: 220,
+      render: (value, row) => (
+        <div className="flex items-start gap-2">
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[10px] font-bold text-slate-600">
+            {row.rank}
+          </span>
+          <span className="font-medium text-slate-800">{value}</span>
+        </div>
+      ),
+    },
+    ...periods.map((item) => ({
+      title: (
+        <div className={item.current ? "font-bold text-red-700" : ""}>
+          <div>{comparisonPeriodLabel(item, data.grain)}</div>
+          {item.current ? <div className="text-[10px]">(ปัจจุบัน)</div> : null}
+        </div>
+      ),
+      dataIndex: item.key,
+      key: item.key,
+      align: "center",
+      width: 140,
+      render: (value) => (
+        <div>
+          <div className={`font-bold tabular-nums ${item.current ? "text-red-700" : "text-slate-800"}`}>
+            {qty(value?.count)} ครั้ง
+          </div>
+          {type === "companies" ? (
+            <div className="mt-1 text-[11px] font-medium tabular-nums text-slate-600">
+              {money(value?.reject_amount)} บาท
+            </div>
+          ) : null}
+        </div>
+      ),
+    })),
+    {
+      title: "รวม",
+      key: "total",
+      align: "center",
+      width: 140,
+      render: (_, row) => (
+        <div>
+          <div className="font-bold tabular-nums text-slate-900">
+            {qty(row.total_count)} ครั้ง
+          </div>
+          {type === "companies" ? (
+            <div className="mt-1 text-[11px] font-medium tabular-nums text-slate-700">
+              {money(row.total_reject_amount)} บาท
+            </div>
+          ) : null}
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <Modal
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width={1400}
+      style={{ maxWidth: "calc(100vw - 24px)" }}
+      centered
+      destroyOnHidden
+      title={
+        <div>
+          <div className="text-base font-semibold text-slate-900">เปรียบเทียบ Top 5 {typeLabel}</div>
+          <div className="mt-0.5 text-[12px] font-normal text-slate-400">
+            เทียบช่วงปัจจุบันกับข้อมูลย้อนหลัง โดยใช้ตัวกรองเดียวกับ Dashboard
+          </div>
+        </div>
+      }
+    >
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm text-slate-600">
+          เปรียบเทียบย้อนหลัง <span className="font-semibold">{previousPeriods} {grainLabel}</span>
+        </div>
+        <Radio.Group
+          size="small"
+          optionType="button"
+          buttonStyle="solid"
+          value={previousPeriods}
+          disabled={loading}
+          options={[
+            { value: 3, label: `ย้อนหลัง 3 ${grainLabel}` },
+            { value: 5, label: `ย้อนหลัง 5 ${grainLabel}` },
+          ]}
+          onChange={(event) => onPeriodsChange(event.target.value)}
+        />
+      </div>
+
+      {error ? <Alert type="error" showIcon message={error} className="mb-3" /> : null}
+      <Spin spinning={loading}>
+        {items.length ? (
+          <Table
+            size="small"
+            bordered
+            pagination={false}
+            dataSource={tableData}
+            columns={comparisonColumns}
+            scroll={{ x: 220 + (periods.length + 1) * 140 }}
+          />
+        ) : !loading && !error ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="ไม่มีข้อมูลในช่วงที่เลือก" />
+        ) : (
+          <div className="h-[300px]" />
+        )}
+      </Spin>
+    </Modal>
+  );
+}
+
 function TrendHoverCard({ active, payload, label, grain = "day" }) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload;
@@ -860,6 +1025,11 @@ export function DashboardPage() {
   const [detailModalLoading, setDetailModalLoading] = useState(false);
   const [detailModalError, setDetailModalError] = useState("");
   const [detailModalRows, setDetailModalRows] = useState([]);
+  const [comparisonModalType, setComparisonModalType] = useState(null);
+  const [comparisonPreviousPeriods, setComparisonPreviousPeriods] = useState(3);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [comparisonError, setComparisonError] = useState("");
+  const [comparisonData, setComparisonData] = useState(null);
 
   const activeFilterCount =
     machineIds.length +
@@ -1096,6 +1266,54 @@ export function DashboardPage() {
     setDetailModalRows([]);
   }
 
+  async function loadTopComparison(type, previousPeriods) {
+    setComparisonLoading(true);
+    setComparisonError("");
+    setComparisonData(null);
+    try {
+      const result = await dashboardApi.getTopComparison({
+        type,
+        previous_periods: previousPeriods,
+        grain:
+          period === "custom"
+            ? trendGrain
+            : period === "all"
+              ? "month"
+              : period,
+        period,
+        from: period === "custom" ? customFrom : undefined,
+        to: period === "custom" ? customTo : undefined,
+        machine_ids: machineIds.length ? machineIds.join(",") : undefined,
+        department_ids: departmentIds.length ? departmentIds.join(",") : undefined,
+        shifts: shifts.length ? shifts.join(",") : undefined,
+        job_types: jobTypes.length ? jobTypes.join(",") : undefined,
+      });
+      setComparisonData(result);
+    } catch (err) {
+      setComparisonError(err.message || "โหลดข้อมูลเปรียบเทียบไม่สำเร็จ");
+    } finally {
+      setComparisonLoading(false);
+    }
+  }
+
+  function openTopComparison(type) {
+    const defaultPreviousPeriods = 3;
+    setComparisonModalType(type);
+    setComparisonPreviousPeriods(defaultPreviousPeriods);
+    loadTopComparison(type, defaultPreviousPeriods);
+  }
+
+  function changeComparisonPeriods(nextPreviousPeriods) {
+    setComparisonPreviousPeriods(nextPreviousPeriods);
+    loadTopComparison(comparisonModalType, nextPreviousPeriods);
+  }
+
+  function closeTopComparison() {
+    setComparisonModalType(null);
+    setComparisonError("");
+    setComparisonData(null);
+  }
+
   return (
     <div className="space-y-5">
       {/* Header + filters in one band */}
@@ -1116,7 +1334,19 @@ export function DashboardPage() {
             </div>
             <div className="text-xs text-slate-300">{thaiDate}</div>
           </div>
-          <div className="flex flex-wrap items-center gap-2 rounded-xl bg-white/10 p-2.5 backdrop-blur">
+        </div>
+      </Card>
+
+      <div className="sticky top-16 z-10 -mx-1 rounded-xl border border-slate-200 bg-white/95 p-2.5 shadow-md backdrop-blur">
+        <div className="flex items-center justify-between gap-3">
+          <div className="hidden min-w-0 md:block">
+            <div className="text-xs font-semibold text-slate-700">ตัวกรอง Dashboard</div>
+            {filterSummary ? (
+              <div className="truncate text-[11px] text-slate-500">{filterSummary}</div>
+            ) : null}
+          </div>
+          <div className="min-w-0 flex-1 overflow-x-auto md:flex-none">
+            <div className="flex w-max items-center gap-2 md:ml-auto">
             <Radio.Group
               size="small"
               optionType="button"
@@ -1134,12 +1364,10 @@ export function DashboardPage() {
                 ตัวกรอง
               </Button>
             </Badge>
+            </div>
           </div>
         </div>
-        {filterSummary ? (
-          <div className="mt-3 text-[11px] text-slate-300">{filterSummary}</div>
-        ) : null}
-      </Card>
+      </div>
 
       <DashboardFilterModal
         open={filterOpen}
@@ -1220,6 +1448,17 @@ export function DashboardPage() {
           error={detailModalError}
           rows={detailModalRows}
           onClose={closeDetailModal}
+        />
+
+        <TopComparisonModal
+          open={Boolean(comparisonModalType)}
+          type={comparisonModalType}
+          previousPeriods={comparisonPreviousPeriods}
+          data={comparisonData}
+          loading={comparisonLoading}
+          error={comparisonError}
+          onPeriodsChange={changeComparisonPeriods}
+          onClose={closeTopComparison}
         />
 
         {/* 2) Reject impact + department damage ranking */}
@@ -1351,6 +1590,22 @@ export function DashboardPage() {
                           index === trendStackKeys.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]
                         }
                       >
+                        {trendStackKeys.length > 1 ? (
+                          <LabelList
+                            dataKey={key}
+                            position="center"
+                            formatter={(value) => (Number(value) > 0 ? qty(value) : "")}
+                            style={{
+                              fill: "#ffffff",
+                              stroke: "rgba(15, 23, 42, 0.45)",
+                              strokeWidth: 1,
+                              paintOrder: "stroke",
+                              fontSize: 11,
+                              fontWeight: 700,
+                              pointerEvents: "none",
+                            }}
+                          />
+                        ) : null}
                         {showTrendLabels && index === trendStackKeys.length - 1 ? (
                           <LabelList
                             dataKey="count"
@@ -1375,7 +1630,19 @@ export function DashboardPage() {
           <Row gutter={[16, 16]} align="stretch">
             <Col xs={24} xl={11} className="flex">
               <div className="w-full">
-              <Panel title="Top 5 ปัญหาที่พบ" subtitle="สัดส่วนปัญหาที่เจอบ่อย">
+              <Panel
+                title="Top 5 ปัญหาที่พบ"
+                subtitle="สัดส่วนปัญหาที่เจอบ่อย"
+                action={
+                  <Button
+                    size="small"
+                    icon={<BarChartOutlined />}
+                    onClick={() => openTopComparison("problems")}
+                  >
+                    เปรียบเทียบ
+                  </Button>
+                }
+              >
                 {(data?.topProblems || []).length ? (
                   <div className="flex h-full flex-col">
                     <div className="relative mx-auto w-full max-w-[380px] shrink-0" style={{ height: 300 }}>
@@ -1439,7 +1706,19 @@ export function DashboardPage() {
             </Col>
             <Col xs={24} xl={13} className="flex">
               <div className="w-full">
-                <Panel title="Top 5 บริษัทลูกค้า" subtitle="ชื่อเต็ม + จำนวนครั้ง + มูลค่า Reject (แผ่นเล็ก × ราคา)">
+                <Panel
+                  title="Top 5 บริษัทลูกค้า"
+                  subtitle="ชื่อเต็ม + จำนวนครั้ง + มูลค่า Reject (แผ่นเล็ก × ราคา)"
+                  action={
+                    <Button
+                      size="small"
+                      icon={<BarChartOutlined />}
+                      onClick={() => openTopComparison("companies")}
+                    >
+                      เปรียบเทียบ
+                    </Button>
+                  }
+                >
                   <HorizontalRankChart items={data?.topCompanies || []} height={300} />
                 </Panel>
               </div>
@@ -1447,17 +1726,36 @@ export function DashboardPage() {
           </Row>
         </section>
 
-        {/* 5) Machines — full width; no agency Top ranking */}
+        {/* 6) Machine comparison matrix — sheets / value / weight per machine */}
         <section>
-          <SectionTitle>6) เครื่องจักรที่ติดปัญหา</SectionTitle>
+          <SectionTitle>6) ตารางเทียบข้อมูลตามเครื่องจักร</SectionTitle>
+          <Panel
+            title="Reject · ทำลาย BL · ส่งคืนลูกค้า แยกตามเครื่อง"
+            subtitle="เลือกรายวัน / รายสัปดาห์ / รายเดือน · แถวล่าสุดคือช่วงปัจจุบัน · ใช้ตัวกรองเดียวกับ Dashboard"
+          >
+            <MachineComparisonPanel
+              period={period}
+              from={customFrom}
+              to={customTo}
+              machineIds={machineIds}
+              departmentIds={departmentIds}
+              shifts={shifts}
+              jobTypes={jobTypes}
+            />
+          </Panel>
+        </section>
+
+        {/* 7) Machines — full width; no agency Top ranking */}
+        <section>
+          <SectionTitle>7) เครื่องจักรที่ติดปัญหา</SectionTitle>
           <Panel title="เปรียบเทียบจำนวน Reject ตามเครื่อง" subtitle="เรียงจากเครื่องที่มีปัญหาบ่อยสุด">
             <VerticalRankChart items={data?.machines || []} height={300} />
           </Panel>
         </section>
 
-        {/* 6) Per-machine top 3 */}
+        {/* 8) Per-machine top 3 */}
         <section>
-          <SectionTitle>7) Top 3 ปัญหาของแต่ละเครื่อง</SectionTitle>
+          <SectionTitle>8) Top 3 ปัญหาของแต่ละเครื่อง</SectionTitle>
           <Panel
             title="เจาะลึกตามเครื่อง"
             subtitle={

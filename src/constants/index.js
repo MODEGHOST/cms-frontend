@@ -1,4 +1,4 @@
-export const APP_NAME = "Complaint Management System";
+export const APP_NAME = "Complaint & Reject Management System";
 export const MODULE_REJECT = "reject";
 
 export const DATE_FILTERS = [

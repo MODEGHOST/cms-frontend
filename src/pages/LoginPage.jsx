@@ -47,7 +47,7 @@ export function LoginPage() {
             COMPANY INTERNAL SYSTEM
           </div>
           <p className="mb-2 text-sm font-medium tracking-[0.18em] text-red-300">
-            COMPLAINT MANAGEMENT SYSTEM
+            COMPLAINT & REJECT MANAGEMENT SYSTEM
           </p>
           <h1 className="mb-5 text-5xl leading-[1.15] font-bold tracking-tight">
             Reject
@@ -86,7 +86,7 @@ export function LoginPage() {
         <Card className="w-full max-w-md rounded-2xl shadow-sm">
           <div className="mb-6">
             <Typography.Text type="secondary">
-              Complaint Management System
+              Complaint & Reject Management System
             </Typography.Text>
             <Typography.Title level={2} className="!mt-1 !mb-1">
               เข้าสู่ระบบ
