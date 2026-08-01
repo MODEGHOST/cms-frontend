@@ -17,6 +17,7 @@ import dayjs from "dayjs";
 import { formatDate } from "../../utils/datetime";
 import { useSession } from "../../hooks/useSession";
 import { rejectApi } from "../../services/api";
+import { canUpdateRejects } from "../../utils/authz";
 
 /** Fields that QC department must fill (Excel column mapping). */
 export const QC_REQUIRED_FIELDS = new Set([
@@ -239,8 +240,8 @@ export function RejectForm({ record, onSaved }) {
     job_type: [],
   });
 
-  const isQc = String(user?.department || "").toUpperCase() === "QC";
-  const canEdit = isQc || user?.role === "admin";
+  const canEdit = canUpdateRejects(user);
+  const isQc = canEdit;
 
   useEffect(() => {
     setEditing(false);

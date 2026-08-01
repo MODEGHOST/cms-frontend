@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Badge,
@@ -12,13 +12,11 @@ import {
   Spin,
   Table,
   Tabs,
-  Typography,
 } from "antd";
 import {
   AlertOutlined,
   BankOutlined,
   BarChartOutlined,
-  ExportOutlined,
   FilterOutlined,
   FileSearchOutlined,
   TagsOutlined,
@@ -41,7 +39,19 @@ import { dashboardApi } from "../services/api";
 import { useSession } from "../hooks/useSession";
 import { DashboardFilterModal } from "../components/dashboard/DashboardFilterModal";
 import { MachineComparisonPanel } from "../components/dashboard/MachineComparisonPanel";
-import { colorForKey } from "../utils/colors";
+import {
+  BAR_COLORS,
+  DetailList,
+  HorizontalRankChart,
+  KpiTile,
+  PIE_COLORS,
+  Panel,
+  SectionTitle,
+  VerticalRankChart,
+  YAxisTick,
+} from "../components/dashboard/primitives";
+import { colorForKey, colorsForKeys } from "../utils/colors";
+import { cacheGet, cacheGetOrSet, cacheKey, cacheSet } from "../utils/dashboardCache";
 import { money, pct, qty } from "../utils/format";
 
 const PERIODS = [
@@ -51,77 +61,10 @@ const PERIODS = [
   { value: "all", label: "ทั้งหมด" },
 ];
 
-const BAR_COLORS = ["#b91c1c", "#dc2626", "#ea580c", "#d97706", "#64748b", "#334155", "#7c2d12"];
-const PIE_COLORS = ["#b91c1c", "#e11d48", "#ea580c", "#f59e0b", "#64748b"];
-
-function SectionTitle({ children }) {
-  return (
-    <div className="mb-3">
-      <Typography.Title level={5} className="!mb-0 !text-slate-800">
-        {children}
-      </Typography.Title>
-    </div>
-  );
-}
-
-function Panel({ title, subtitle, action, children, className = "" }) {
-  return (
-    <Card
-      className={`h-full rounded-xl shadow-sm ${className}`}
-      styles={{
-        body: {
-          padding: 20,
-          height: "100%",
-          display: "flex",
-          flexDirection: "column",
-        },
-      }}
-    >
-      <div className="mb-4 flex min-h-[44px] shrink-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-slate-800">{title}</div>
-          {subtitle ? <div className="mt-0.5 text-[11px] leading-4 text-slate-400">{subtitle}</div> : null}
-        </div>
-        {action ? <div className="shrink-0">{action}</div> : null}
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col">{children}</div>
-    </Card>
-  );
-}
-
-function KpiTile({ icon, label, value, hint, tone = "red", onClick }) {
-  const tones = {
-    red: "bg-red-50 text-red-700",
-    orange: "bg-orange-50 text-orange-700",
-    slate: "bg-slate-100 text-slate-700",
-    rose: "bg-rose-50 text-rose-700",
-    amber: "bg-amber-50 text-amber-700",
-  };
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group flex w-full items-center gap-3 rounded-xl border border-slate-100 bg-white px-4 py-3.5 text-left shadow-sm transition hover:border-red-200 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
-    >
-      <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-lg ${tones[tone]}`}>
-        {icon}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="text-[11px] text-slate-500">{label}</div>
-        <div className="truncate text-xl font-bold tracking-tight text-slate-900">{value}</div>
-        {hint ? <div className="truncate text-[11px] text-slate-400">{hint}</div> : null}
-      </div>
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-50 text-slate-400 transition group-hover:bg-red-50 group-hover:text-red-600">
-        <ExportOutlined className="text-sm" />
-      </div>
-    </button>
-  );
-}
-
 const KPI_MODAL_META = {
   rejects: {
     title: "รายละเอียดจำนวน Reject",
-    subtitle: "รายการ Reject ทั้งหมดในช่วงที่เลือก (สูงสุด 500 รายการ)",
+    subtitle: "รายการ Reject ทั้งหมดในช่วงที่เลือก",
   },
   amount: {
     title: "รายละเอียดมูลค่า Reject",
@@ -137,8 +80,19 @@ const KPI_MODAL_META = {
   },
 };
 
-function KpiDetailModal({ open, type, loading, error, rows, onClose }) {
+function KpiDetailModal({
+  open,
+  type,
+  loading,
+  error,
+  rows,
+  onClose,
+  pagination,
+  onPaginationChange,
+  subtitleExtra,
+}) {
   const meta = KPI_MODAL_META[type] || { title: "รายละเอียด", subtitle: "" };
+  const subtitle = [meta.subtitle, subtitleExtra].filter(Boolean).join(" · ");
 
   const columns =
     type === "rejects"
@@ -224,6 +178,18 @@ function KpiDetailModal({ open, type, loading, error, rows, onClose }) {
           },
         ];
 
+  const tablePagination = pagination
+    ? {
+        current: pagination.page,
+        pageSize: pagination.pageSize,
+        total: pagination.total,
+        showSizeChanger: true,
+        pageSizeOptions: [10, 20, 50],
+        showTotal: (total) => `${total.toLocaleString("th-TH")} รายการ`,
+        onChange: (page, pageSize) => onPaginationChange?.(page, pageSize),
+      }
+    : { pageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50] };
+
   return (
     <Modal
       open={open}
@@ -233,8 +199,8 @@ function KpiDetailModal({ open, type, loading, error, rows, onClose }) {
       title={
         <div>
           <div className="text-base font-semibold text-slate-900">{meta.title}</div>
-          {meta.subtitle ? (
-            <div className="mt-0.5 text-[12px] font-normal text-slate-400">{meta.subtitle}</div>
+          {subtitle ? (
+            <div className="mt-0.5 text-[12px] font-normal text-slate-400">{subtitle}</div>
           ) : null}
         </div>
       }
@@ -247,7 +213,7 @@ function KpiDetailModal({ open, type, loading, error, rows, onClose }) {
         rowKey={(row) => row.id || row.name}
         dataSource={rows}
         columns={columns}
-        pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50] }}
+        pagination={tablePagination}
         scroll={{ x: type === "rejects" ? 980 : 700 }}
         locale={{ emptyText: "ไม่มีข้อมูลในช่วงนี้" }}
       />
@@ -413,168 +379,6 @@ function RejectImpactPanel({ kpi }) {
   );
 }
 
-function wrapLabel(value, maxChars = 18) {
-  const text = String(value || "");
-  if (text.length <= maxChars) return text;
-  const words = text.split(" ");
-  const lines = [];
-  let current = "";
-  for (const word of words) {
-    const next = current ? `${current} ${word}` : word;
-    if (next.length > maxChars && current) {
-      lines.push(current);
-      current = word;
-    } else {
-      current = next;
-    }
-  }
-  if (current) lines.push(current);
-  return lines.slice(0, 3).join("\n");
-}
-
-function YAxisTick({ x, y, payload }) {
-  const lines = String(wrapLabel(payload?.value, 16)).split("\n");
-  return (
-    <g transform={`translate(${x},${y})`}>
-      <text textAnchor="end" fill="#334155" fontSize={11} fontWeight={500}>
-        {lines.map((line, index) => (
-          <tspan key={`${line}-${index}`} x={0} dy={index === 0 ? -(lines.length - 1) * 6 : 12}>
-            {line}
-          </tspan>
-        ))}
-      </text>
-    </g>
-  );
-}
-
-function DetailList({ items, showClaim = false, colors = BAR_COLORS }) {
-  const total = items.reduce((sum, item) => sum + Number(item.count || 0), 0) || 1;
-  return (
-    <div className="space-y-2">
-      {items.map((item, index) => {
-        const pct = ((Number(item.count || 0) / total) * 100).toFixed(1);
-        const amount = item.reject_amount ?? item.claim_amount;
-        return (
-          <div
-            key={item.id || item.name}
-            className="flex items-start justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5"
-          >
-            <div className="flex min-w-0 items-start gap-2">
-              <span
-                className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
-                style={{ background: colors[index % colors.length] }}
-              />
-              <div className="min-w-0">
-                <div className="text-[13px] leading-4 break-words text-slate-800">
-                  <span className="font-semibold text-slate-500">{index + 1}.</span> {item.name}
-                </div>
-                {showClaim && amount != null ? (
-                  <div className="text-[11px] text-slate-400">
-                    มูลค่า Reject {money(amount)} บาท
-                  </div>
-                ) : null}
-              </div>
-            </div>
-            <div className="shrink-0 text-right">
-              <div className="text-sm font-bold text-slate-900">
-                {Number(item.count || 0).toLocaleString("th-TH")} ครั้ง
-              </div>
-              <div className="text-[11px] text-slate-400">{pct}%</div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function HorizontalRankChart({ items, emptyText = "ไม่มีข้อมูลในช่วงนี้", height = 300 }) {
-  if (!items?.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />;
-  const total = items.reduce((sum, item) => sum + Number(item.count || 0), 0) || 1;
-  const chartData = items.map((item) => ({
-    ...item,
-    label: `${Number(item.count || 0).toLocaleString("th-TH")} ครั้ง`,
-  }));
-
-  return (
-    <div className="flex h-full flex-col">
-      <div className="shrink-0" style={{ height }}>
-        <ResponsiveContainer>
-          <BarChart
-            data={chartData}
-            layout="vertical"
-            margin={{ top: 8, right: 72, left: 8, bottom: 4 }}
-            barCategoryGap="16%"
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-            <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12 }} />
-            <YAxis type="category" dataKey="name" width={150} interval={0} tick={<YAxisTick />} />
-            <Tooltip
-              formatter={(value, _name, props) => {
-                const pct = ((Number(value) / total) * 100).toFixed(1);
-                return [`${value} ครั้ง (${pct}%)`, props?.payload?.name || "จำนวน"];
-              }}
-            />
-            <Bar dataKey="count" radius={[0, 8, 8, 0]} maxBarSize={36}>
-              {chartData.map((entry, index) => (
-                <Cell key={entry.id || entry.name} fill={BAR_COLORS[index % BAR_COLORS.length]} />
-              ))}
-              <LabelList
-                dataKey="label"
-                position="right"
-                style={{ fill: "#0f172a", fontSize: 12, fontWeight: 700 }}
-              />
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-      <div className="mt-4 min-h-0 flex-1 overflow-auto">
-        <DetailList items={items} showClaim />
-      </div>
-    </div>
-  );
-}
-
-function VerticalRankChart({ items, emptyText = "ไม่มีข้อมูลในช่วงนี้", height = 300, compact = false }) {
-  if (!items?.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />;
-  const total = items.reduce((sum, item) => sum + Number(item.count || 0), 0) || 1;
-  const chartData = items.map((item) => ({
-    ...item,
-    label: `${Number(item.count || 0).toLocaleString("th-TH")} ครั้ง`,
-  }));
-
-  return (
-    <div className={compact ? "" : "space-y-3"}>
-      <div style={{ width: "100%", height }} className="min-h-[260px]">
-        <ResponsiveContainer>
-          <BarChart data={chartData} margin={{ top: 32, right: 16, left: 4, bottom: 8 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-            <XAxis dataKey="name" tick={{ fontSize: 12 }} interval={0} />
-            <YAxis allowDecimals={false} tick={{ fontSize: 12 }} width={36} />
-            <Tooltip
-              formatter={(value) => {
-                const pct = ((Number(value) / total) * 100).toFixed(1);
-                return [`${value} ครั้ง (${pct}%)`, "จำนวน"];
-              }}
-            />
-            <Bar dataKey="count" radius={[8, 8, 0, 0]} maxBarSize={64}>
-              {chartData.map((entry, index) => (
-                <Cell key={entry.id || entry.name} fill={BAR_COLORS[index % BAR_COLORS.length]} />
-              ))}
-              <LabelList
-                dataKey="label"
-                position="top"
-                style={{ fill: "#0f172a", fontSize: 12, fontWeight: 700 }}
-              />
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-      {!compact ? <DetailList items={items} /> : null}
-    </div>
-  );
-}
-
 /** Bars of reject % — vertical (few cats on X) or horizontal (many Master names on Y) */
 function RejectPctBarChart({
   items,
@@ -726,7 +530,17 @@ function RejectPctBarChart({
   );
 }
 
-function RejectDetailModal({ open, title, subtitle, loading, error, rows, onClose }) {
+function RejectDetailModal({
+  open,
+  title,
+  subtitle,
+  loading,
+  error,
+  rows,
+  onClose,
+  pagination,
+  onPaginationChange,
+}) {
   const columns = [
     {
       title: "ชื่อเต็มลูกค้า",
@@ -759,6 +573,18 @@ function RejectDetailModal({ open, title, subtitle, loading, error, rows, onClos
     },
   ];
 
+  const tablePagination = pagination
+    ? {
+        current: pagination.page,
+        pageSize: pagination.pageSize,
+        total: pagination.total,
+        showSizeChanger: true,
+        pageSizeOptions: [10, 20, 50],
+        showTotal: (total) => `${total.toLocaleString("th-TH")} รายการ`,
+        onChange: (page, pageSize) => onPaginationChange?.(page, pageSize),
+      }
+    : { pageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50] };
+
   return (
     <Modal
       open={open}
@@ -783,7 +609,7 @@ function RejectDetailModal({ open, title, subtitle, loading, error, rows, onClos
         rowKey={(row) => row.id}
         dataSource={rows}
         columns={columns}
-        pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50] }}
+        pagination={tablePagination}
         scroll={{ x: 900 }}
         locale={{ emptyText: "ไม่มีรายการในช่วงนี้" }}
       />
@@ -1014,17 +840,23 @@ export function DashboardPage() {
   const [jobTypes, setJobTypes] = useState([]);
   const [filterOpen, setFilterOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [trendLoading, setTrendLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
+  const [filterOptions, setFilterOptions] = useState(null);
+  const filterOptionsRef = useRef(null);
   const [machineTab, setMachineTab] = useState(null);
   const [kpiModalType, setKpiModalType] = useState(null);
   const [kpiModalLoading, setKpiModalLoading] = useState(false);
   const [kpiModalError, setKpiModalError] = useState("");
   const [kpiModalRows, setKpiModalRows] = useState([]);
+  const [kpiModalPaging, setKpiModalPaging] = useState({ page: 1, pageSize: 10, total: 0 });
   const [detailModal, setDetailModal] = useState(null);
   const [detailModalLoading, setDetailModalLoading] = useState(false);
   const [detailModalError, setDetailModalError] = useState("");
   const [detailModalRows, setDetailModalRows] = useState([]);
+  const [detailModalPaging, setDetailModalPaging] = useState({ page: 1, pageSize: 10, total: 0 });
+  const detailModalRef = useRef(null);
   const [comparisonModalType, setComparisonModalType] = useState(null);
   const [comparisonPreviousPeriods, setComparisonPreviousPeriods] = useState(3);
   const [comparisonLoading, setComparisonLoading] = useState(false);
@@ -1038,32 +870,69 @@ export function DashboardPage() {
     jobTypes.length +
     (period === "custom" ? 1 : 0);
 
+  const queryParams = useMemo(
+    () => ({
+      period,
+      from: period === "custom" ? customFrom : undefined,
+      to: period === "custom" ? customTo : undefined,
+      machine_ids: machineIds.length ? machineIds.join(",") : undefined,
+      department_ids: departmentIds.length ? departmentIds.join(",") : undefined,
+      shifts: shifts.length ? shifts.join(",") : undefined,
+      job_types: jobTypes.length ? jobTypes.join(",") : undefined,
+    }),
+    [period, customFrom, customTo, machineIds, departmentIds, shifts, jobTypes],
+  );
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const options = await cacheGetOrSet("reject-filter-options", () =>
+          dashboardApi.getFilterOptions(),
+        );
+        if (!alive) return;
+        filterOptionsRef.current = options;
+        setFilterOptions(options);
+        setData((prev) => (prev ? { ...prev, ...options } : prev));
+      } catch {
+        /* filter modal can still open with empty lists */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   useEffect(() => {
     let alive = true;
     (async () => {
       setLoading(true);
       setError("");
       try {
-        const result = await dashboardApi.getReject({
-          period,
-          from: period === "custom" ? customFrom : undefined,
-          to: period === "custom" ? customTo : undefined,
-          machine_ids: machineIds.length ? machineIds.join(",") : undefined,
-          department_ids: departmentIds.length ? departmentIds.join(",") : undefined,
-          shifts: shifts.length ? shifts.join(",") : undefined,
-          job_types: jobTypes.length ? jobTypes.join(",") : undefined,
+        const summaryKey = cacheKey("reject-summary", queryParams);
+        const cached = cacheGet(summaryKey);
+        const summary =
+          cached || cacheSet(summaryKey, await dashboardApi.getReject(queryParams));
+        if (!alive) return;
+
+        const options = filterOptionsRef.current || {};
+        setData((prev) => ({
+          ...(prev || {}),
+          ...options,
+          ...summary,
+          trend: prev?.trend,
+          trendStackKeys: prev?.trendStackKeys,
+          trendGrain: prev?.trendGrain,
+        }));
+
+        const first = summary.machinesWithTopProblems?.[0]?.id;
+        setMachineTab((current) => {
+          if (machineIds.length === 1) return String(machineIds[0]);
+          if (current && summary.machinesWithTopProblems?.some((m) => String(m.id) === current)) {
+            return current;
+          }
+          return first ? String(first) : null;
         });
-        if (alive) {
-          setData(result);
-          const first = result.machinesWithTopProblems?.[0]?.id;
-          setMachineTab((current) => {
-            if (machineIds.length === 1) return String(machineIds[0]);
-            if (current && result.machinesWithTopProblems?.some((m) => String(m.id) === current)) {
-              return current;
-            }
-            return first ? String(first) : null;
-          });
-        }
       } catch (err) {
         if (alive) setError(err.message || "โหลด Dashboard ไม่สำเร็จ");
       } finally {
@@ -1073,7 +942,38 @@ export function DashboardPage() {
     return () => {
       alive = false;
     };
-  }, [period, customFrom, customTo, machineIds, departmentIds, shifts, jobTypes]);
+  }, [queryParams, machineIds]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setTrendLoading(true);
+      try {
+        const trendKey = cacheKey("reject-trend", queryParams);
+        const cached = cacheGet(trendKey);
+        const trend =
+          cached || cacheSet(trendKey, await dashboardApi.getTrend(queryParams));
+        if (!alive) return;
+        setData((prev) => ({
+          ...(prev || {}),
+          trend: trend.trend,
+          trendStackKeys: trend.trendStackKeys,
+          trendGrain: trend.trendGrain,
+          filters: {
+            ...(prev?.filters || {}),
+            ...(trend.filters || {}),
+          },
+        }));
+      } catch (err) {
+        if (alive) setError(err.message || "โหลดแนวโน้มไม่สำเร็จ");
+      } finally {
+        if (alive) setTrendLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [queryParams]);
 
   const thaiDate = useMemo(
     () =>
@@ -1086,12 +986,14 @@ export function DashboardPage() {
     [],
   );
 
+  const filterOpts = filterOptions || data || {};
+
   const filterSummary = useMemo(() => {
     if (!data?.filters) return null;
     const parts = [`ช่วง ${data.filters.from} → ${data.filters.to}`];
 
     if (machineIds.length) {
-      const names = (data.machineOptions || [])
+      const names = (filterOpts.machineOptions || [])
         .filter((item) => machineIds.includes(item.id))
         .map((item) => item.name);
       parts.push(names.length ? `เครื่อง ${names.join(", ")}` : `เครื่อง ${machineIds.length} รายการ`);
@@ -1100,10 +1002,12 @@ export function DashboardPage() {
     }
 
     if (departmentIds.length) {
-      const names = (data.departmentOptions || [])
+      const names = (filterOpts.departmentOptions || [])
         .filter((item) => departmentIds.includes(item.id))
         .map((item) => item.name);
-      parts.push(names.length ? `หน่วยงาน ${names.join(", ")}` : `หน่วยงาน ${departmentIds.length} รายการ`);
+      parts.push(
+        names.length ? `หน่วยงาน ${names.join(", ")}` : `หน่วยงาน ${departmentIds.length} รายการ`,
+      );
     }
 
     if (shifts.length) {
@@ -1115,7 +1019,7 @@ export function DashboardPage() {
     }
 
     return parts.join(" · ");
-  }, [data, machineIds, departmentIds, shifts, jobTypes]);
+  }, [data, filterOpts, machineIds, departmentIds, shifts, jobTypes]);
 
   const problemTotal = useMemo(
     () => (data?.topProblems || []).reduce((sum, item) => sum + Number(item.count || 0), 0) || 1,
@@ -1123,9 +1027,11 @@ export function DashboardPage() {
   );
 
   const showTrendLabels = (data?.trend || []).length > 0 && (data?.trend || []).length <= 14;
-  const trendStackKeys = data?.trendStackKeys?.length
-    ? data.trendStackKeys
-    : ["count"];
+  const trendStackKeys = useMemo(
+    () => (data?.trendStackKeys?.length ? data.trendStackKeys : ["count"]),
+    [data?.trendStackKeys],
+  );
+  const trendStackColors = useMemo(() => colorsForKeys(trendStackKeys), [trendStackKeys]);
   const trendGrain = data?.trendGrain || data?.filters?.trend_grain || "day";
   const trendCopy =
     trendGrain === "month"
@@ -1168,28 +1074,35 @@ export function DashboardPage() {
     setJobTypes(next.jobTypes || []);
   }
 
+  const loadKpiModal = useCallback(
+    async (type, page = 1, pageSize = 10) => {
+      setKpiModalLoading(true);
+      setKpiModalError("");
+      try {
+        const params = { ...queryParams, type, page, pageSize };
+        const key = cacheKey("reject-kpi-detail", params);
+        const result =
+          cacheGet(key) || cacheSet(key, await dashboardApi.getKpiDetail(params));
+        setKpiModalRows(result.rows || []);
+        setKpiModalPaging({
+          page: result.page || page,
+          pageSize: result.pageSize || pageSize,
+          total: result.total ?? (result.rows || []).length,
+        });
+      } catch (err) {
+        setKpiModalError(err.message || "โหลดรายละเอียดไม่สำเร็จ");
+      } finally {
+        setKpiModalLoading(false);
+      }
+    },
+    [queryParams],
+  );
+
   async function openKpiModal(type) {
     setKpiModalType(type);
-    setKpiModalLoading(true);
-    setKpiModalError("");
     setKpiModalRows([]);
-    try {
-      const result = await dashboardApi.getKpiDetail({
-        type,
-        period,
-        from: period === "custom" ? customFrom : undefined,
-        to: period === "custom" ? customTo : undefined,
-        machine_ids: machineIds.length ? machineIds.join(",") : undefined,
-        department_ids: departmentIds.length ? departmentIds.join(",") : undefined,
-        shifts: shifts.length ? shifts.join(",") : undefined,
-        job_types: jobTypes.length ? jobTypes.join(",") : undefined,
-      });
-      setKpiModalRows(result.rows || []);
-    } catch (err) {
-      setKpiModalError(err.message || "โหลดรายละเอียดไม่สำเร็จ");
-    } finally {
-      setKpiModalLoading(false);
-    }
+    setKpiModalPaging({ page: 1, pageSize: 10, total: 0 });
+    await loadKpiModal(type, 1, 10);
   }
 
   function closeKpiModal() {
@@ -1198,70 +1111,76 @@ export function DashboardPage() {
     setKpiModalRows([]);
   }
 
+  const loadDetailModal = useCallback(
+    async (meta, page = 1, pageSize = 10) => {
+      if (!meta?.type || !meta?.id) return;
+      setDetailModalLoading(true);
+      setDetailModalError("");
+      try {
+        const params = {
+          ...queryParams,
+          page,
+          pageSize,
+          ...(meta.type === "problem"
+            ? { problem_id: meta.id }
+            : { department_id: meta.id }),
+        };
+        const key = cacheKey(`reject-${meta.type}-detail`, params);
+        const fetcher =
+          meta.type === "problem"
+            ? dashboardApi.getProblemDetail
+            : dashboardApi.getDepartmentDetail;
+        const result = cacheGet(key) || cacheSet(key, await fetcher(params));
+        setDetailModalRows(result.rows || []);
+        setDetailModalPaging({
+          page: result.page || page,
+          pageSize: result.pageSize || pageSize,
+          total: result.total ?? (result.rows || []).length,
+        });
+      } catch (err) {
+        setDetailModalError(err.message || "โหลดรายละเอียดไม่สำเร็จ");
+      } finally {
+        setDetailModalLoading(false);
+      }
+    },
+    [queryParams],
+  );
+
   async function openProblemModal(problem) {
     if (!problem?.id) return;
-    setDetailModal({
+    const meta = {
       type: "problem",
       id: problem.id,
       name: problem.name,
       title: `รายละเอียดปัญหา: ${problem.name}`,
       subtitle: "รายการ Reject ของปัญหานี้ในช่วงที่เลือก",
-    });
-    setDetailModalLoading(true);
-    setDetailModalError("");
+    };
+    detailModalRef.current = meta;
+    setDetailModal(meta);
     setDetailModalRows([]);
-    try {
-      const result = await dashboardApi.getProblemDetail({
-        problem_id: problem.id,
-        period,
-        from: period === "custom" ? customFrom : undefined,
-        to: period === "custom" ? customTo : undefined,
-        machine_ids: machineIds.length ? machineIds.join(",") : undefined,
-        department_ids: departmentIds.length ? departmentIds.join(",") : undefined,
-        shifts: shifts.length ? shifts.join(",") : undefined,
-        job_types: jobTypes.length ? jobTypes.join(",") : undefined,
-      });
-      setDetailModalRows(result.rows || []);
-    } catch (err) {
-      setDetailModalError(err.message || "โหลดรายละเอียดไม่สำเร็จ");
-    } finally {
-      setDetailModalLoading(false);
-    }
+    setDetailModalPaging({ page: 1, pageSize: 10, total: 0 });
+    await loadDetailModal(meta, 1, 10);
   }
 
   async function openDepartmentModal(department) {
     if (!department?.id) return;
-    setDetailModal({
+    const meta = {
       type: "department",
       id: department.id,
       name: department.name,
       title: `รายละเอียดหน่วยงาน: ${department.name}`,
       subtitle: "รายการ Reject ของหน่วยงานนี้ในช่วงที่เลือก",
-    });
-    setDetailModalLoading(true);
-    setDetailModalError("");
+    };
+    detailModalRef.current = meta;
+    setDetailModal(meta);
     setDetailModalRows([]);
-    try {
-      const result = await dashboardApi.getDepartmentDetail({
-        department_id: department.id,
-        period,
-        from: period === "custom" ? customFrom : undefined,
-        to: period === "custom" ? customTo : undefined,
-        machine_ids: machineIds.length ? machineIds.join(",") : undefined,
-        department_ids: departmentIds.length ? departmentIds.join(",") : undefined,
-        shifts: shifts.length ? shifts.join(",") : undefined,
-        job_types: jobTypes.length ? jobTypes.join(",") : undefined,
-      });
-      setDetailModalRows(result.rows || []);
-    } catch (err) {
-      setDetailModalError(err.message || "โหลดรายละเอียดไม่สำเร็จ");
-    } finally {
-      setDetailModalLoading(false);
-    }
+    setDetailModalPaging({ page: 1, pageSize: 10, total: 0 });
+    await loadDetailModal(meta, 1, 10);
   }
 
   function closeDetailModal() {
     setDetailModal(null);
+    detailModalRef.current = null;
     setDetailModalError("");
     setDetailModalRows([]);
   }
@@ -1280,13 +1199,7 @@ export function DashboardPage() {
             : period === "all"
               ? "month"
               : period,
-        period,
-        from: period === "custom" ? customFrom : undefined,
-        to: period === "custom" ? customTo : undefined,
-        machine_ids: machineIds.length ? machineIds.join(",") : undefined,
-        department_ids: departmentIds.length ? departmentIds.join(",") : undefined,
-        shifts: shifts.length ? shifts.join(",") : undefined,
-        job_types: jobTypes.length ? jobTypes.join(",") : undefined,
+        ...queryParams,
       });
       setComparisonData(result);
     } catch (err) {
@@ -1382,10 +1295,10 @@ export function DashboardPage() {
           shifts,
           jobTypes,
         }}
-        machineOptions={data?.machineOptions || []}
-        departmentOptions={data?.departmentOptions || []}
-        shiftOptions={data?.shiftOptions || []}
-        jobTypeOptions={data?.jobTypeOptions || []}
+        machineOptions={filterOpts.machineOptions || []}
+        departmentOptions={filterOpts.departmentOptions || []}
+        shiftOptions={filterOpts.shiftOptions || []}
+        jobTypeOptions={filterOpts.jobTypeOptions || []}
       />
 
       {error ? <Alert type="error" showIcon message={error} className="mb-1" /> : null}
@@ -1437,16 +1350,31 @@ export function DashboardPage() {
           loading={kpiModalLoading}
           error={kpiModalError}
           rows={kpiModalRows}
+          pagination={kpiModalType === "rejects" ? kpiModalPaging : undefined}
+          onPaginationChange={(page, pageSize) => loadKpiModal(kpiModalType, page, pageSize)}
+          subtitleExtra={
+            kpiModalType === "rejects" && kpiModalPaging.total
+              ? `${kpiModalPaging.total.toLocaleString("th-TH")} รายการ`
+              : undefined
+          }
           onClose={closeKpiModal}
         />
 
         <RejectDetailModal
           open={Boolean(detailModal)}
           title={detailModal?.title}
-          subtitle={detailModal?.subtitle}
+          subtitle={
+            detailModalPaging.total
+              ? `${detailModal?.subtitle} · ${detailModalPaging.total.toLocaleString("th-TH")} รายการ`
+              : detailModal?.subtitle
+          }
           loading={detailModalLoading}
           error={detailModalError}
           rows={detailModalRows}
+          pagination={detailModalPaging}
+          onPaginationChange={(page, pageSize) =>
+            loadDetailModal(detailModalRef.current || detailModal, page, pageSize)
+          }
           onClose={closeDetailModal}
         />
 
@@ -1550,77 +1478,79 @@ export function DashboardPage() {
         <section>
           <SectionTitle>{trendCopy.section}</SectionTitle>
           <Panel title={trendCopy.title} subtitle={trendCopy.subtitle}>
-            {(data?.trend || []).length ? (
-              <div className="h-[320px]">
-                <ResponsiveContainer>
-                  <BarChart
-                    data={data.trend}
-                    margin={{ top: 18, right: 8, left: 0, bottom: 8 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis
-                      dataKey="label"
-                      tick={{ fontSize: 10 }}
-                      interval={data.trend.length > 16 ? "preserveStartEnd" : 0}
-                      angle={data.trend.length > 12 ? -30 : 0}
-                      textAnchor={data.trend.length > 12 ? "end" : "middle"}
-                      height={data.trend.length > 12 ? 50 : 30}
-                      minTickGap={trendGrain === "day" ? 8 : 4}
-                    />
-                    <YAxis allowDecimals={false} tick={{ fontSize: 10 }} width={28} />
-                    <Tooltip
-                      cursor={{ fill: "rgba(185, 28, 28, 0.08)" }}
-                      content={<TrendHoverCard grain={trendGrain} />}
-                      wrapperStyle={{ zIndex: 20, outline: "none" }}
-                    />
-                    <Legend
-                      wrapperStyle={{ fontSize: 11, paddingTop: 4 }}
-                      iconType="circle"
-                      iconSize={8}
-                    />
-                    {trendStackKeys.map((key, index) => (
-                      <Bar
-                        key={key}
-                        dataKey={key}
-                        name={key === "count" ? "Reject" : key}
-                        stackId="period"
-                        fill={colorForKey(key, index)}
-                        maxBarSize={42}
-                        radius={
-                          index === trendStackKeys.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]
-                        }
-                      >
-                        {trendStackKeys.length > 1 ? (
-                          <LabelList
-                            dataKey={key}
-                            position="center"
-                            formatter={(value) => (Number(value) > 0 ? qty(value) : "")}
-                            style={{
-                              fill: "#ffffff",
-                              stroke: "rgba(15, 23, 42, 0.45)",
-                              strokeWidth: 1,
-                              paintOrder: "stroke",
-                              fontSize: 11,
-                              fontWeight: 700,
-                              pointerEvents: "none",
-                            }}
-                          />
-                        ) : null}
-                        {showTrendLabels && index === trendStackKeys.length - 1 ? (
-                          <LabelList
-                            dataKey="count"
-                            position="top"
-                            style={{ fill: "#0f172a", fontSize: 10, fontWeight: 700 }}
-                          />
-                        ) : null}
-                      </Bar>
-                    ))}
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            ) : (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="ไม่มีข้อมูลในช่วงนี้" />
-            )}
+            <Spin spinning={trendLoading}>
+              {(data?.trend || []).length ? (
+                <div className="h-[320px]">
+                  <ResponsiveContainer>
+                    <BarChart
+                      data={data.trend}
+                      margin={{ top: 18, right: 8, left: 0, bottom: 8 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis
+                        dataKey="label"
+                        tick={{ fontSize: 10 }}
+                        interval={data.trend.length > 16 ? "preserveStartEnd" : 0}
+                        angle={data.trend.length > 12 ? -30 : 0}
+                        textAnchor={data.trend.length > 12 ? "end" : "middle"}
+                        height={data.trend.length > 12 ? 50 : 30}
+                        minTickGap={trendGrain === "day" ? 8 : 4}
+                      />
+                      <YAxis allowDecimals={false} tick={{ fontSize: 10 }} width={28} />
+                      <Tooltip
+                        cursor={{ fill: "rgba(185, 28, 28, 0.08)" }}
+                        content={<TrendHoverCard grain={trendGrain} />}
+                        wrapperStyle={{ zIndex: 20, outline: "none" }}
+                      />
+                      <Legend
+                        wrapperStyle={{ fontSize: 11, paddingTop: 4 }}
+                        iconType="circle"
+                        iconSize={8}
+                      />
+                      {trendStackKeys.map((key, index) => (
+                        <Bar
+                          key={key}
+                          dataKey={key}
+                          name={key === "count" ? "Reject" : key}
+                          stackId="period"
+                          fill={trendStackColors[key] || colorForKey(key, index)}
+                          maxBarSize={42}
+                          radius={
+                            index === trendStackKeys.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]
+                          }
+                        >
+                          {trendStackKeys.length > 1 ? (
+                            <LabelList
+                              dataKey={key}
+                              position="center"
+                              formatter={(value) => (Number(value) > 0 ? qty(value) : "")}
+                              style={{
+                                fill: "#ffffff",
+                                stroke: "rgba(15, 23, 42, 0.45)",
+                                strokeWidth: 1,
+                                paintOrder: "stroke",
+                                fontSize: 11,
+                                fontWeight: 700,
+                                pointerEvents: "none",
+                              }}
+                            />
+                          ) : null}
+                          {showTrendLabels && index === trendStackKeys.length - 1 ? (
+                            <LabelList
+                              dataKey="count"
+                              position="top"
+                              style={{ fill: "#0f172a", fontSize: 10, fontWeight: 700 }}
+                            />
+                          ) : null}
+                        </Bar>
+                      ))}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="ไม่มีข้อมูลในช่วงนี้" />
+              )}
+            </Spin>
           </Panel>
         </section>
 
@@ -1719,7 +1649,14 @@ export function DashboardPage() {
                     </Button>
                   }
                 >
-                  <HorizontalRankChart items={data?.topCompanies || []} height={300} />
+                  <HorizontalRankChart
+                    items={data?.topCompanies || []}
+                    height={300}
+                    renderMeta={(item) => {
+                      const amount = item.reject_amount ?? item.claim_amount;
+                      return amount == null ? null : `มูลค่า Reject ${money(amount)} บาท`;
+                    }}
+                  />
                 </Panel>
               </div>
             </Col>
@@ -1761,7 +1698,8 @@ export function DashboardPage() {
             subtitle={
               machineIds.length === 1
                 ? `กำลังโฟกัสเครื่อง ${
-                    data?.machineOptions?.find((item) => item.id === machineIds[0])?.name || machineIds[0]
+                    filterOpts.machineOptions?.find((item) => item.id === machineIds[0])?.name ||
+                      machineIds[0]
                   }`
                 : machineIds.length > 1
                   ? `กำลังกรอง ${machineIds.length} เครื่อง`

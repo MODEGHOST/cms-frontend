@@ -10,54 +10,63 @@ import {
   MenuFoldOutlined,
   MenuOutlined,
   MenuUnfoldOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
+import { canManageSystem } from "../utils/authz";
 
-const NAV_GROUPS = [
-  {
-    key: "reject",
-    label: "Reject",
-    children: [
-      { key: "/dashboard", icon: <DashboardOutlined />, label: "Dashboard Reject" },
-      { key: "/rejects", icon: <FileSearchOutlined />, label: "รายการ Reject" },
-      { key: "/reject-form", icon: <FormOutlined />, label: "ฟอร์ม Reject" },
-    ],
-  },
-  {
-    key: "complaint",
-    label: "Complaint",
-    children: [
-      {
-        key: "/complaint-dashboard",
-        icon: <DashboardOutlined />,
-        label: "Dashboard Complaint",
-        disabled: true,
-      },
-      {
-        key: "/complaints",
-        icon: <FileSearchOutlined />,
-        label: "รายการ Complaint",
-        disabled: true,
-      },
-      {
-        key: "/complaint-form",
-        icon: <FormOutlined />,
-        label: "ฟอร์ม Complaint",
-      },
-    ],
-  },
-  {
-    key: "system",
-    label: "ระบบ",
-    children: [
-      { key: "/activity-logs", icon: <HistoryOutlined />, label: "Activity Log" },
-      { key: "/masters", icon: <DatabaseOutlined />, label: "Master Data" },
-    ],
-  },
-];
-
-const NAV_ITEMS = NAV_GROUPS.flatMap((group) => group.children);
+function buildNavGroups(user) {
+  const systemChildren = [
+    { key: "/activity-logs", icon: <HistoryOutlined />, label: "Activity Log" },
+    { key: "/masters", icon: <DatabaseOutlined />, label: "Master Data" },
+  ];
+  if (canManageSystem(user)) {
+    systemChildren.push({
+      key: "/system",
+      icon: <SettingOutlined />,
+      label: "สมาชิกและสิทธิ์",
+    });
+  }
+  return [
+    {
+      key: "reject",
+      label: "Reject",
+      children: [
+        { key: "/dashboard", icon: <DashboardOutlined />, label: "Dashboard Reject" },
+        { key: "/rejects", icon: <FileSearchOutlined />, label: "รายการ Reject" },
+        { key: "/reject-form", icon: <FormOutlined />, label: "ฟอร์ม Reject" },
+      ],
+    },
+    {
+      key: "complaint",
+      label: "Complaint",
+      children: [
+        {
+          key: "/complaint-dashboard",
+          icon: <DashboardOutlined />,
+          label: "Dashboard Complaint",
+        },
+        {
+          key: "/complaints",
+          icon: <FileSearchOutlined />,
+          label: "รายการ Complaint",
+          disabled: true,
+        },
+        {
+          key: "/complaint-form",
+          icon: <FormOutlined />,
+          label: "ฟอร์ม Complaint",
+        },
+      ],
+    },
+    {
+      key: "system",
+      label: "ระบบ",
+      children: systemChildren,
+    },
+  ];
+}
 
 const SIDEBAR_EXPANDED = 248;
 const SIDEBAR_COLLAPSED = 76;
@@ -70,6 +79,7 @@ function SidebarContent({
   user,
   collapsed = false,
   onToggleCollapse,
+  navGroups,
 }) {
   const displayName = user?.display_name || user?.username || "?";
   return (
@@ -108,7 +118,7 @@ function SidebarContent({
           selectedKeys={[selectedKey]}
           className="border-none !bg-transparent"
           style={{ borderInlineEnd: "none" }}
-          items={NAV_GROUPS.map((group) => ({
+          items={(navGroups || []).map((group) => ({
             type: "group",
             key: group.key,
             label: group.label,
@@ -163,8 +173,8 @@ function SidebarContent({
                 </div>
                 <div className="text-xs text-slate-400">
                   {user?.department
-                    ? `แผนก ${user.department} · ${user?.role || "-"}`
-                    : user?.role || "-"}
+                    ? `แผนก ${user.department} · ${(user?.roles || [user?.role]).filter(Boolean).join(", ") || "-"}`
+                    : (user?.roles || [user?.role]).filter(Boolean).join(", ") || "-"}
                 </div>
               </div>
               <Button
@@ -216,9 +226,15 @@ export function AppLayout() {
 
   const sidebarWidth = collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
 
+  const navGroups = useMemo(() => buildNavGroups(user), [user]);
+  const navItems = useMemo(
+    () => navGroups.flatMap((group) => group.children),
+    [navGroups],
+  );
+
   const title = useMemo(() => {
-    return NAV_ITEMS.find((item) => item.key === location.pathname)?.label || "CMS";
-  }, [location.pathname]);
+    return navItems.find((item) => item.key === location.pathname)?.label || "CMS";
+  }, [location.pathname, navItems]);
 
   const onLogout = async () => {
     await logout();
@@ -245,6 +261,7 @@ export function AppLayout() {
           user={user}
           collapsed={collapsed}
           onToggleCollapse={toggleCollapsed}
+          navGroups={navGroups}
         />
       </aside>
 
@@ -261,6 +278,7 @@ export function AppLayout() {
           onNavigate={onNavigate}
           onLogout={onLogout}
           user={user}
+          navGroups={navGroups}
         />
       </Drawer>
 

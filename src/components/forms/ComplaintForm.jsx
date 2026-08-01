@@ -27,6 +27,12 @@ import dayjs from "dayjs";
 import { useSession } from "../../hooks/useSession";
 import { complaintApi } from "../../services/api";
 import { formatDate } from "../../utils/datetime";
+import {
+  canCsWork,
+  canDepartmentWork,
+  canQaWork,
+  isCmsAdmin,
+} from "../../utils/authz";
 
 const STEP_ITEMS_FULL = [
   { title: "CS", description: "ขั้นตอนที่ 1" },
@@ -99,15 +105,11 @@ const GROUP_BY_STATUS = {
 };
 
 function isCsUser(user) {
-  if (user?.role === "admin") return true;
-  const department = String(user?.department || "").trim().toUpperCase();
-  return department === "CS" || department === "CUSTOMER SERVICE";
+  return canCsWork(user);
 }
 
 function isQaUser(user) {
-  if (user?.role === "admin") return true;
-  const department = String(user?.department || "").trim().toUpperCase();
-  return department === "QA" || department === "QC";
+  return canQaWork(user);
 }
 
 function normalizeDeptName(value) {
@@ -115,7 +117,8 @@ function normalizeDeptName(value) {
 }
 
 function isResponsibleDepartmentUser(user, record) {
-  if (user?.role === "admin") return true;
+  if (isCmsAdmin(user)) return true;
+  if (!canDepartmentWork(user)) return false;
   const userDept = normalizeDeptName(user?.department);
   const responsible = normalizeDeptName(record?.responsible_department_name);
   return Boolean(userDept && responsible && userDept === responsible);
@@ -134,7 +137,7 @@ function canDepartmentEdit(status, user, record) {
 }
 
 function canEditStep(status, user, record) {
-  if (user?.role === "admin") return status !== "completed";
+  if (isCmsAdmin(user)) return status !== "completed";
   if (canCsEdit(status, user)) return true;
   if (status === "pending_qa") return isQaUser(user);
   if (status === "pending_department") {
@@ -213,11 +216,11 @@ const SECTIONS = [
 ];
 
 function userFieldGroup(user, activeGroup) {
-  if (user?.role === "admin") return activeGroup;
-  const department = String(user?.department || "").trim().toUpperCase();
-  if (department === "CS" || department === "CUSTOMER SERVICE") return "cs";
-  if (department === "QA" || department === "QC") return "qa";
-  return department ? "department" : null;
+  if (isCmsAdmin(user)) return activeGroup;
+  if (canCsWork(user)) return "cs";
+  if (canQaWork(user)) return "qa";
+  if (canDepartmentWork(user) || user?.department) return "department";
+  return null;
 }
 
 function FieldLabel({ label, required }) {

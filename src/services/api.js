@@ -29,6 +29,10 @@ export const authApi = {
 export const dashboardApi = {
   getReject: (params) =>
     api.get("/api/dashboard/reject", { params }).then((res) => res.data),
+  getTrend: (params) =>
+    api.get("/api/dashboard/reject/trend", { params }).then((res) => res.data),
+  getFilterOptions: () =>
+    api.get("/api/dashboard/reject/filter-options").then((res) => res.data),
   getRejectDayDetail: (params) =>
     api.get("/api/dashboard/reject/day-detail", { params }).then((res) => res.data),
   getTopComparison: (params) =>
@@ -41,6 +45,21 @@ export const dashboardApi = {
     api.get("/api/dashboard/reject/problem-detail", { params }).then((res) => res.data),
   getDepartmentDetail: (params) =>
     api.get("/api/dashboard/reject/department-detail", { params }).then((res) => res.data),
+};
+
+export const complaintDashboardApi = {
+  getSummary: (params) =>
+    api.get("/api/dashboard/complaint", { params }).then((res) => res.data),
+  getTrend: (params) =>
+    api.get("/api/dashboard/complaint/trend", { params }).then((res) => res.data),
+  getFilterOptions: () =>
+    api.get("/api/dashboard/complaint/filter-options").then((res) => res.data),
+  getSummaryTable: (params) =>
+    api.get("/api/dashboard/complaint/summary-table", { params }).then((res) => res.data),
+  getKpiDetail: (params) =>
+    api.get("/api/dashboard/complaint/kpi-detail", { params }).then((res) => res.data),
+  getEntityDetail: (params) =>
+    api.get("/api/dashboard/complaint/entity-detail", { params }).then((res) => res.data),
 };
 
 export const rejectApi = {
@@ -85,6 +104,31 @@ export const masterApi = {
     api.post(`/api/masters/${key}`, payload).then((res) => res.data),
   update: (key, id, payload) =>
     api.patch(`/api/masters/${key}/${id}`, payload).then((res) => res.data),
+};
+
+export const systemApi = {
+  overview: () => api.get("/api/system/overview").then((res) => res.data),
+  listRoles: () => api.get("/api/system/roles").then((res) => res.data),
+  listPermissions: () =>
+    api.get("/api/system/permissions").then((res) => res.data),
+  createRole: (payload) =>
+    api.post("/api/system/roles", payload).then((res) => res.data),
+  updateRolePermissions: (roleId, permissionIds) =>
+    api
+      .put(`/api/system/roles/${roleId}/permissions`, { permissionIds })
+      .then((res) => res.data),
+  deleteRole: (roleId) =>
+    api.delete(`/api/system/roles/${roleId}`).then((res) => res.data),
+  listMembers: (params) =>
+    api.get("/api/system/members", { params }).then((res) => res.data),
+  listCenterUsers: (params) =>
+    api.get("/api/system/center-users", { params }).then((res) => res.data),
+  createMember: (payload) =>
+    api.post("/api/system/members", payload).then((res) => res.data),
+  updateMember: (userId, payload) =>
+    api.patch(`/api/system/members/${userId}`, payload).then((res) => res.data),
+  revokeMember: (userId) =>
+    api.delete(`/api/system/members/${userId}`).then((res) => res.data),
 };
 
 export default api;
