@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FileSearchOutlined } from "@ant-design/icons";
 import { Alert, App, Empty, Input, Spin, Table, Typography } from "antd";
+import { useSearchParams } from "react-router-dom";
 import { ComplaintForm } from "../components/forms/ComplaintForm";
 import { PageHeader } from "../components/ui/PageHeader";
+import { COMPLAINT_WORKFLOW_LABELS } from "../constants/complaintWorkflow";
 import { complaintApi } from "../services/api";
 import { formatDate } from "../utils/datetime";
 
@@ -10,31 +12,24 @@ const RESULT_COLUMNS = [
   { title: "PDR", dataIndex: "pdr_no" },
   { title: "ลูกค้า", dataIndex: "company_name", render: (value) => value || "-" },
   { title: "สินค้า", dataIndex: "product_name", render: (value) => value || "-" },
-  { title: "วันที่รับเรื่อง", dataIndex: "received_date", render: formatDate },
+  { title: "วันที่รับเรื่อง", dataIndex: "received_date", render: (value) => formatDate(value) },
   {
     title: "สถานะ",
     dataIndex: "workflow_status",
-    render: (value) =>
-      ({
-        cs_draft: "รอ CS",
-        pending_qa: "รอ QA รับเรื่อง",
-        qa_review: "รอ QA",
-        pending_department: "รอหน่วยงานรับเรื่อง",
-        department_action: "หน่วยงานกำลังดำเนินการ",
-        qa_confirm: "รอ QA Confirm",
-        completed: "เสร็จสิ้น",
-      })[value] || value,
+    render: (value) => COMPLAINT_WORKFLOW_LABELS[value] || value,
   },
 ];
 
 export function ComplaintFormPage() {
   const { message } = App.useApp();
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [records, setRecords] = useState([]);
   const [selectedRecord, setSelectedRecord] = useState(null);
+  const [searchValue, setSearchValue] = useState("");
 
-  const searchByPdr = async (rawValue) => {
+  const searchByPdr = async (rawValue, preferredId) => {
     const pdrNo = String(rawValue || "").trim();
     if (!pdrNo) {
       message.warning("กรุณากรอกเลข PDR");
@@ -42,19 +37,34 @@ export function ComplaintFormPage() {
     }
     setLoading(true);
     setSearched(true);
+    setSearchValue(pdrNo);
     setRecords([]);
     setSelectedRecord(null);
     try {
       const result = await complaintApi.searchByPdr(pdrNo);
       const rows = result.data || [];
       setRecords(rows);
-      if (rows.length === 1) setSelectedRecord(rows[0]);
+      if (!rows.length) return;
+      const preferred = preferredId
+        ? rows.find((row) => Number(row.id) === Number(preferredId))
+        : null;
+      if (preferred) setSelectedRecord(preferred);
+      else if (rows.length === 1) setSelectedRecord(rows[0]);
     } catch (error) {
       message.error(error.message || "ไม่สามารถค้นหาข้อมูลได้");
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const pdr = String(searchParams.get("pdr") || "").trim();
+    const id = searchParams.get("id");
+    if (!pdr) return;
+    searchByPdr(pdr, id);
+    // deep-link once per querystring
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const updateRecord = (updated) => {
     setSelectedRecord(updated);
@@ -91,7 +101,9 @@ export function ComplaintFormPage() {
             allowClear
             enterButton="ค้นหา"
             placeholder="เช่น PDR2601-01291"
-            onSearch={searchByPdr}
+            value={searchValue}
+            onChange={(event) => setSearchValue(event.target.value)}
+            onSearch={(value) => searchByPdr(value)}
             loading={loading}
           />
         </div>
@@ -104,7 +116,7 @@ export function ComplaintFormPage() {
           </div>
         ) : null}
 
-        {records.length > 1 ? (
+        {records.length > 1 && !selectedRecord ? (
           <div className="mb-4 rounded-2xl bg-white p-4 shadow-sm md:p-6">
             <Alert
               className="mb-4"

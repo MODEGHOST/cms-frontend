@@ -72,17 +72,62 @@ export const rejectApi = {
 };
 
 export const complaintApi = {
+  inbox: (params) =>
+    api.get("/api/complaints/inbox", { params }).then((res) => res.data),
+  inboxCount: () =>
+    api.get("/api/complaints/inbox/count").then((res) => res.data),
   searchByPdr: (pdrNo) =>
     api.get("/api/complaints", { params: { pdr_no: pdrNo } }).then((res) => res.data),
   formOptions: () => api.get("/api/complaints/form-options").then((res) => res.data),
   nextDocumentNo: () =>
     api.get("/api/complaints/next-document-no").then((res) => res.data),
+  downloadActionPlanPdf: async (id) => {
+    try {
+      const response = await api.get(`/api/complaints/${id}/action-plan.pdf`, {
+        responseType: "blob",
+      });
+      const disposition = response.headers?.["content-disposition"] || "";
+      const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+      const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+      const filename = utfMatch
+        ? decodeURIComponent(utfMatch[1])
+        : plainMatch
+          ? plainMatch[1]
+          : `action-plan-${id}.pdf`;
+      const blobUrl = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+      return { filename };
+    } catch (error) {
+      const blob = error?.data instanceof Blob ? error.data : error?.response?.data;
+      if (blob instanceof Blob) {
+        try {
+          const payload = JSON.parse(await blob.text());
+          throw Object.assign(new Error(payload.message || "ดาวน์โหลด PDF ไม่สำเร็จ"), {
+            status: error.status || error?.response?.status,
+          });
+        } catch (parseError) {
+          if (parseError?.message && !String(parseError.message).includes("JSON")) {
+            throw parseError;
+          }
+        }
+      }
+      throw error;
+    }
+  },
   update: (id, payload) =>
     api.patch(`/api/complaints/${id}`, payload).then((res) => res.data),
   submitCs: (id, formData) =>
     api.post(`/api/complaints/${id}/cs-submit`, formData).then((res) => res.data),
   submitDepartment: (id, formData) =>
     api.post(`/api/complaints/${id}/department-submit`, formData).then((res) => res.data),
+  saveQaConfirm: (id, formData) =>
+    api.post(`/api/complaints/${id}/qa-confirm-save`, formData).then((res) => res.data),
   accept: (id) =>
     api.patch(`/api/complaints/${id}`, { action: "accept" }).then((res) => res.data),
   ensureDocFields: (id) =>

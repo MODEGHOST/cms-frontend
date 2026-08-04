@@ -7,6 +7,7 @@ import {
   Checkbox,
   DatePicker,
   Form,
+  Image,
   Input,
   InputNumber,
   Modal,
@@ -19,20 +20,28 @@ import {
 } from "antd";
 import {
   CheckCircleOutlined,
+  DeleteOutlined,
   EditOutlined,
+  MinusOutlined,
   PaperClipOutlined,
+  PlusOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { useSession } from "../../hooks/useSession";
 import { complaintApi } from "../../services/api";
 import { formatDate } from "../../utils/datetime";
+import { compressUploadFileList } from "../../utils/compressImage";
 import {
   canCsWork,
   canDepartmentWork,
   canQaWork,
   isCmsAdmin,
 } from "../../utils/authz";
+import {
+  ActionPlanDocument,
+  canShowActionPlanDocument,
+} from "./ActionPlanDocument";
 
 const STEP_ITEMS_FULL = [
   { title: "CS", description: "ขั้นตอนที่ 1" },
@@ -68,9 +77,17 @@ const STATUS_INDEX_SKIP_DEPT = {
 };
 
 const DOCUMENT_ACCEPTED_OPTIONS = [
-  { value: "P", label: "P · รับเอกสาร" },
-  { value: "O", label: "O · ไม่รับเอกสาร" },
+  { value: "P", label: "รับเอกสาร" },
+  { value: "O", label: "ไม่รับเอกสาร" },
 ];
+
+function formatDocumentAccepted(value) {
+  const code = String(value || "").trim().toUpperCase();
+  if (code === "P") return "รับเอกสาร";
+  if (code === "O") return "ไม่รับเอกสาร";
+  if (!code) return "-";
+  return String(value);
+}
 
 function DocumentScopeCheckbox({ value, onChange }) {
   return (
@@ -192,7 +209,7 @@ const SECTIONS = [
       ["problem_name", "ปัญหา", "select", "cs"],
       ["problem_name_en", "Problem", "text", "source"],
       ["grade", "Grade", "select", "source"],
-      ["document_accepted", "เอกสาร (รับ/ไม่รับ)", "select", "cs"],
+      ["document_accepted", "เอกสาร Action plan", "select", "cs"],
       ["document_scope", "เอกสารภายใน/ภายนอก", "select", "qa"],
       ["document_no", "เลขที่เอกสาร", "text", "qa"],
       ["doc_forward_date", "วันที่ส่งต่อเอกสาร", "date", "department"],
@@ -232,7 +249,8 @@ function FieldLabel({ label, required }) {
   );
 }
 
-function displayValue(value, type) {
+function displayValue(value, type, name) {
+  if (name === "document_accepted") return formatDocumentAccepted(value);
   if (value == null || value === "") return "-";
   if (type === "date") return formatDate(value);
   if (type === "number") {
@@ -249,11 +267,454 @@ function formatFileSize(bytes) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function AttachmentGallery({ attachments = [] }) {
+function getUploadPreviewUrl(file) {
+  if (!file) return null;
+  if (file.thumbUrl) return file.thumbUrl;
+  if (file.url) {
+    return String(file.url).includes("?") ? `${file.url}&inline=1` : `${file.url}?inline=1`;
+  }
+  const raw = file.originFileObj || file;
+  if (raw instanceof Blob) return URL.createObjectURL(raw);
+  return null;
+}
+
+/** Compact modern signature picker — solid border, small icon, image cover when set. */
+function SignatureUploadBox({ fileList = [], onChange, size = 40 }) {
+  const file = fileList[0] || null;
+  const previewUrl = getUploadPreviewUrl(file);
+  const boxStyle = { width: size, height: size };
+
+  const uploadProps = {
+    accept: "image/*",
+    maxCount: 1,
+    showUploadList: false,
+    beforeUpload: () => false,
+    fileList,
+    onChange: ({ fileList: next }) => onChange?.(next.slice(-1)),
+  };
+
+  if (file && previewUrl) {
+    return (
+      <div
+        className="group relative overflow-hidden rounded-lg border border-slate-200 bg-white"
+        style={boxStyle}
+      >
+        <img
+          src={previewUrl}
+          alt={file.name || "ลายเซ็น"}
+          className="h-full w-full object-cover"
+        />
+        <div className="absolute inset-0 flex items-center justify-center gap-0.5 bg-black/45 opacity-0 transition group-hover:opacity-100">
+          <Upload {...uploadProps}>
+            <button
+              type="button"
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-white text-slate-700"
+              title="เปลี่ยน"
+            >
+              <UploadOutlined className="text-xs" />
+            </button>
+          </Upload>
+          <button
+            type="button"
+            className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-white text-red-600"
+            title="ลบ"
+            onClick={() => onChange?.([])}
+          >
+            <DeleteOutlined className="text-xs" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Upload {...uploadProps} className="!block">
+      <button
+        type="button"
+        style={boxStyle}
+        className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 transition hover:border-red-300 hover:bg-red-50/40 hover:text-red-600"
+        title="อัปโหลดลายเซ็น"
+      >
+        <UploadOutlined className={size >= 48 ? "text-base" : "text-sm"} />
+      </button>
+    </Upload>
+  );
+}
+
+const PLAN_CONTRIBUTOR_DEFAULT = 2;
+const PLAN_CONTRIBUTOR_MAX = 10;
+const PLAN_APPROVAL_ROLES = [
+  { key: "production_specialist", label: "ผู้เชี่ยวชาญการผลิต" },
+  { key: "qa_deputy", label: "รองผู้จัดการฝ่ายประกันคุณภาพ" },
+];
+
+function emptyContributorRow() {
+  return { name: "", position: "" };
+}
+
+function emptyPlanFormState(count = PLAN_CONTRIBUTOR_DEFAULT) {
+  const size = Math.min(PLAN_CONTRIBUTOR_MAX, Math.max(1, count));
+  return {
+    contributors: Array.from({ length: size }, () => emptyContributorRow()),
+  };
+}
+
+function normalizePlanFormState(raw) {
+  if (!raw) return emptyPlanFormState();
+  let parsed = raw;
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return emptyPlanFormState();
+    }
+  }
+  const contributors = Array.isArray(parsed?.contributors) ? parsed.contributors : [];
+  if (!contributors.length) return emptyPlanFormState();
+  return {
+    contributors: contributors.slice(0, PLAN_CONTRIBUTOR_MAX).map((row) => ({
+      name: String(row?.name || "").trim(),
+      position: String(row?.position || "").trim(),
+    })),
+  };
+}
+
+function attachmentById(attachments, id) {
+  if (!id) return null;
+  return (attachments || []).find((item) => Number(item.id) === Number(id)) || null;
+}
+
+function parsePlanFormRaw(raw) {
+  if (!raw) return null;
+  let parsed = raw;
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  return parsed;
+}
+
+function collectPlanSignatureIds(raw) {
+  const parsed = parsePlanFormRaw(raw);
+  if (!parsed) return new Set();
+  const ids = new Set();
+  for (const row of parsed.contributors || []) {
+    const id = Number(row?.signatureId);
+    if (Number.isInteger(id) && id > 0) ids.add(id);
+  }
+  for (const role of PLAN_APPROVAL_ROLES) {
+    const id = Number(parsed?.approvals?.[role.key]?.signatureId);
+    if (Number.isInteger(id) && id > 0) ids.add(id);
+  }
+  return ids;
+}
+
+function planSignatureListsFromRecord(record) {
+  const parsed = parsePlanFormRaw(record?.plan_form_json);
+  const attachments = record?.attachments || [];
+  const rows = Array.isArray(parsed?.contributors) ? parsed.contributors : [];
+  const contributorCount = Math.max(rows.length, PLAN_CONTRIBUTOR_DEFAULT);
+  const contributorSigs = Array.from({ length: contributorCount }, (_, index) => {
+    const id = rows[index]?.signatureId;
+    const attachment = attachmentById(attachments, id);
+    return attachment ? toUploadFileList([attachment]) : [];
+  }).slice(0, PLAN_CONTRIBUTOR_MAX);
+  const approvalSigs = {};
+  for (const role of PLAN_APPROVAL_ROLES) {
+    const id = parsed?.approvals?.[role.key]?.signatureId;
+    const attachment = attachmentById(attachments, id);
+    approvalSigs[role.key] = attachment ? toUploadFileList([attachment]) : [];
+  }
+  return { contributorSigs, approvalSigs };
+}
+
+function PlanContributorsView({ record }) {
+  const parsed = parsePlanFormRaw(record?.plan_form_json);
+  const attachments = record?.attachments || [];
+  const displayRows = (Array.isArray(parsed?.contributors) ? parsed.contributors : [])
+    .slice(0, PLAN_CONTRIBUTOR_MAX)
+    .filter(
+      (row) =>
+        String(row?.name || "").trim() ||
+        String(row?.position || "").trim() ||
+        row?.signatureId,
+    );
+
+  if (!displayRows.length && !PLAN_APPROVAL_ROLES.some((role) => parsed?.approvals?.[role.key]?.signatureId)) {
+    return (
+      <div className="rounded-xl border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-slate-400">
+        ยังไม่มีข้อมูลผู้ร่วมจัดทำแผน
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <div className="mx-auto flex min-w-[640px] max-w-4xl overflow-hidden rounded border border-slate-400 bg-white">
+        <table className="w-full min-w-0 flex-1 border-collapse text-sm">
+          <thead>
+            <tr>
+              <th
+                colSpan={3}
+                className="border-b border-slate-400 bg-slate-50 px-2 py-2 text-center text-sm font-semibold text-slate-800"
+              >
+                ผู้ร่วมจัดทำแผน
+              </th>
+            </tr>
+            <tr className="bg-white text-xs font-medium text-slate-600">
+              <th className="w-[42%] border-b border-r border-slate-400 px-2 py-1.5 text-left font-medium">
+                ชื่อ - สกุล
+              </th>
+              <th className="w-[38%] border-b border-r border-slate-400 px-2 py-1.5 text-left font-medium">
+                ตำแหน่ง
+              </th>
+              <th className="w-[20%] border-b border-slate-400 px-2 py-1.5 text-center font-medium">
+                ลงชื่อ
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {displayRows.map((row, index) => {
+              const attachment = attachmentById(attachments, row?.signatureId);
+              const isLast = index === displayRows.length - 1;
+              return (
+                <tr key={`plan-view-row-${index}`}>
+                  <td
+                    className={`border-r border-slate-400 px-2 py-1.5 align-middle text-slate-800 ${
+                      isLast ? "" : "border-b"
+                    }`}
+                  >
+                    {row?.name || "\u00a0"}
+                  </td>
+                  <td
+                    className={`border-r border-slate-400 px-2 py-1.5 align-middle text-slate-800 ${
+                      isLast ? "" : "border-b"
+                    }`}
+                  >
+                    {row?.position || "\u00a0"}
+                  </td>
+                  <td
+                    className={`px-1 py-1 align-middle ${isLast ? "" : "border-b border-slate-400"}`}
+                  >
+                    <div className="mx-auto flex h-14 w-full max-w-[110px] items-center justify-center">
+                      {attachment ? (
+                        <Image
+                          src={`${attachment.url}?inline=1`}
+                          alt={row?.name || "ลายเซ็น"}
+                          className="!h-full !w-full object-contain"
+                          rootClassName="h-full w-full [&_.ant-image-img]:h-full [&_.ant-image-img]:w-full [&_.ant-image-img]:object-contain"
+                          preview={{ mask: "ดูภาพ" }}
+                        />
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+
+        <div className="flex w-[200px] shrink-0 flex-col border-l border-slate-400">
+          {PLAN_APPROVAL_ROLES.map((role, index) => {
+            const attachment = attachmentById(
+              attachments,
+              parsed?.approvals?.[role.key]?.signatureId,
+            );
+            return (
+              <div
+                key={role.key}
+                className={`flex flex-1 flex-col items-center justify-end px-3 py-3 ${
+                  index === 0 ? "border-b border-slate-400" : ""
+                }`}
+              >
+                <div className="mb-2 flex h-16 w-full items-center justify-center">
+                  {attachment ? (
+                    <Image
+                      src={`${attachment.url}?inline=1`}
+                      alt={role.label}
+                      className="!h-full !w-full object-contain"
+                      rootClassName="h-full w-full [&_.ant-image-img]:h-full [&_.ant-image-img]:w-full [&_.ant-image-img]:object-contain"
+                      preview={{ mask: "ดูภาพ" }}
+                    />
+                  ) : (
+                    <div className="h-10 w-full" />
+                  )}
+                </div>
+                <div className="w-full border-t border-dotted border-slate-500 pt-1.5 text-center text-[11px] leading-snug text-slate-700">
+                  {role.label}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlanContributorsForm({
+  planForm,
+  onPlanFormChange,
+  contributorSigs,
+  onContributorSigsChange,
+  approvalSigs,
+  onApprovalSigsChange,
+}) {
+  const canAdd = planForm.contributors.length < PLAN_CONTRIBUTOR_MAX;
+  const canRemove = planForm.contributors.length > 1;
+
+  const updateContributor = (index, key, value) => {
+    onPlanFormChange({
+      ...planForm,
+      contributors: planForm.contributors.map((row, rowIndex) =>
+        rowIndex === index ? { ...row, [key]: value } : row,
+      ),
+    });
+  };
+
+  const addContributor = () => {
+    if (!canAdd) return;
+    onPlanFormChange({
+      ...planForm,
+      contributors: [...planForm.contributors, emptyContributorRow()],
+    });
+    onContributorSigsChange([...(contributorSigs || []), []]);
+  };
+
+  const removeContributor = (index) => {
+    if (!canRemove) return;
+    onPlanFormChange({
+      ...planForm,
+      contributors: planForm.contributors.filter((_, rowIndex) => rowIndex !== index),
+    });
+    onContributorSigsChange(
+      (contributorSigs || []).filter((_, rowIndex) => rowIndex !== index),
+    );
+  };
+
+  return (
+    <div className="grid grid-cols-1 gap-x-4 gap-y-2 lg:grid-cols-[minmax(0,1fr)_168px]">
+      <div>
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <div className="text-sm text-slate-800">ผู้ร่วมจัดทำแผน</div>
+          <Button
+            type="link"
+            size="small"
+            className="!px-0"
+            icon={<PlusOutlined />}
+            disabled={!canAdd}
+            onClick={addContributor}
+          >
+            เพิ่ม
+          </Button>
+        </div>
+
+        <div className="overflow-hidden rounded-lg border border-slate-200">
+          <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_88px_28px] gap-2 border-b border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-500">
+            <div>ชื่อ - สกุล</div>
+            <div>ตำแหน่ง</div>
+            <div className="text-center">ลงชื่อ</div>
+            <div />
+          </div>
+          {planForm.contributors.map((row, index) => (
+            <div
+              key={`contributor-${index}`}
+              className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_88px_28px] items-center gap-2 border-b border-slate-100 px-2 py-1.5 last:border-b-0"
+            >
+              <Input
+                size="middle"
+                value={row.name}
+                placeholder="ชื่อ - สกุล"
+                onChange={(event) => updateContributor(index, "name", event.target.value)}
+              />
+              <Input
+                size="middle"
+                value={row.position}
+                placeholder="ตำแหน่ง"
+                onChange={(event) => updateContributor(index, "position", event.target.value)}
+              />
+              <div className="flex justify-center py-0.5">
+                <SignatureUploadBox
+                  size={80}
+                  fileList={contributorSigs[index] || []}
+                  onChange={(next) => {
+                    const lists = [...(contributorSigs || [])];
+                    while (lists.length <= index) lists.push([]);
+                    lists[index] = next;
+                    onContributorSigsChange(lists);
+                  }}
+                />
+              </div>
+              <Button
+                type="text"
+                danger
+                size="small"
+                className="!px-0"
+                icon={<MinusOutlined />}
+                disabled={!canRemove}
+                title="ลบรายชื่อ"
+                onClick={() => removeContributor(index)}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-1 text-sm text-slate-800">ลายเซ็นผู้อนุมัติ</div>
+        <div className="space-y-2">
+          {PLAN_APPROVAL_ROLES.map((role) => (
+            <div key={role.key} className="rounded-lg border border-slate-200 px-2 py-2">
+              <div className="mb-1.5 text-center text-[11px] leading-tight text-slate-500">
+                {role.label}
+              </div>
+              <div className="flex justify-center">
+                <SignatureUploadBox
+                  size={80}
+                  fileList={approvalSigs[role.key] || []}
+                  onChange={(next) =>
+                    onApprovalSigsChange({ ...approvalSigs, [role.key]: next })
+                  }
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const PDF_IMAGE_SLOT_OPTIONS = [
+  { value: "picture", label: "Picture (รูปภาพ)" },
+  { value: "cause", label: "สาเหตุ" },
+  { value: "correction", label: "แก้ไข" },
+  { value: "prevention", label: "แนวทางป้องกัน" },
+  { value: "none", label: "ไม่ใส่ใน PDF" },
+];
+
+function parsePdfImageSlots(raw) {
+  const parsed = parsePlanFormRaw(raw);
+  const slots = parsed?.pdfImageSlots || parsed?.pdf_image_slots || {};
+  if (!slots || typeof slots !== "object") return {};
+  const out = {};
+  for (const [key, value] of Object.entries(slots)) {
+    const id = Number(key);
+    if (!Number.isInteger(id) || id <= 0) continue;
+    out[String(id)] = String(value || "");
+  }
+  return out;
+}
+
+function AttachmentGallery({ attachments = [], emptyText = "ยังไม่มีไฟล์แนบ" }) {
   if (!attachments.length) {
     return (
       <div className="rounded-xl border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-slate-400">
-        ยังไม่มีไฟล์แนบ
+        {emptyText}
       </div>
     );
   }
@@ -261,6 +722,32 @@ function AttachmentGallery({ attachments = [] }) {
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {attachments.map((attachment) => {
         const isImage = String(attachment.mime_type || "").startsWith("image/");
+        const meta = (
+          <div className="p-3">
+            <div className="truncate text-sm font-medium">{attachment.original_name}</div>
+            <div className="mt-1 text-xs text-slate-400">
+              {formatFileSize(attachment.file_size)}
+              {attachment.uploaded_by_name ? ` · ${attachment.uploaded_by_name}` : ""}
+            </div>
+          </div>
+        );
+        if (isImage) {
+          return (
+            <div
+              key={attachment.id}
+              className="overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:border-red-300 hover:shadow-sm"
+            >
+              <Image
+                src={`${attachment.url}?inline=1`}
+                alt={attachment.original_name}
+                className="!h-32 !w-full bg-slate-50 object-contain"
+                rootClassName="block w-full [&_.ant-image-img]:h-32 [&_.ant-image-img]:w-full [&_.ant-image-img]:bg-slate-50 [&_.ant-image-img]:object-contain"
+                preview={{ mask: "ดูภาพ" }}
+              />
+              {meta}
+            </div>
+          );
+        }
         return (
           <a
             key={attachment.id}
@@ -269,29 +756,183 @@ function AttachmentGallery({ attachments = [] }) {
             rel="noreferrer"
             className="overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:border-red-300 hover:shadow-sm"
           >
-            {isImage ? (
-              <img
-                src={`${attachment.url}?inline=1`}
-                alt={attachment.original_name}
-                className="h-32 w-full bg-slate-50 object-contain"
-              />
-            ) : (
-              <div className="flex h-24 items-center justify-center bg-slate-50 text-3xl text-slate-400">
-                <PaperClipOutlined />
-              </div>
-            )}
-            <div className="p-3">
-              <div className="truncate text-sm font-medium">{attachment.original_name}</div>
-              <div className="mt-1 text-xs text-slate-400">
-                {formatFileSize(attachment.file_size)}
-                {attachment.uploaded_by_name ? ` · ${attachment.uploaded_by_name}` : ""}
-              </div>
+            <div className="flex h-24 items-center justify-center bg-slate-50 text-3xl text-slate-400">
+              <PaperClipOutlined />
             </div>
+            {meta}
           </a>
         );
       })}
     </div>
   );
+}
+
+/** Compact image + PDF slot picker for QA Confirm modal. */
+function QaPdfImageAssigner({
+  attachments = [],
+  pdfImageSlots = {},
+  onPdfSlotChange,
+  fileList = [],
+  onFileListChange,
+  newFileSlots = {},
+  onNewFileSlotChange,
+  disabled = false,
+}) {
+  const previewUrl = (file) => {
+    if (file.thumbUrl) return file.thumbUrl;
+    if (file.url) return file.url.includes("inline=") ? file.url : `${file.url}?inline=1`;
+    return null;
+  };
+
+  return (
+    <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+      <div>
+        <div className="text-sm font-semibold text-slate-800">เลือกรูปใส่ใน PDF</div>
+        <div className="mt-0.5 text-xs text-slate-500">
+          เลือกช่อง Picture / สาเหตุ / แก้ไข / แนวทางป้องกัน — ช่องละสูงสุด 3 รูป
+        </div>
+      </div>
+
+      {attachments.length ? (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {attachments.map((attachment) => {
+            const slotValue =
+              pdfImageSlots[String(attachment.id)] ||
+              pdfImageSlots[attachment.id] ||
+              "picture";
+            return (
+              <div
+                key={attachment.id}
+                className="flex gap-2 rounded-lg border border-slate-200 bg-white p-1.5 shadow-sm"
+              >
+                <Image
+                  src={`${attachment.url}?inline=1`}
+                  alt={attachment.original_name}
+                  className="!h-12 !w-14 rounded object-cover"
+                  rootClassName="shrink-0 [&_.ant-image-img]:h-12 [&_.ant-image-img]:w-14 [&_.ant-image-img]:rounded [&_.ant-image-img]:object-cover"
+                  preview={{ mask: "ดู" }}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[11px] font-medium text-slate-700">
+                    {attachment.original_name}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    {formatFileSize(attachment.file_size)}
+                  </div>
+                  <Select
+                    className="mt-1 w-full"
+                    size="small"
+                    disabled={disabled}
+                    value={slotValue}
+                    options={PDF_IMAGE_SLOT_OPTIONS}
+                    onChange={(value) => onPdfSlotChange?.(attachment.id, value)}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-3 text-center text-xs text-slate-400">
+          ยังไม่มีรูป — อัปโหลดด้านล่างได้
+        </div>
+      )}
+
+      {fileList.length ? (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {fileList.map((file) => {
+            const src = previewUrl(file);
+            const isImage = String(file.type || "").startsWith("image/");
+            const slotValue = newFileSlots[file.uid] || "picture";
+            return (
+              <div
+                key={file.uid}
+                className="flex gap-2 rounded-lg border border-dashed border-red-200 bg-white p-1.5"
+              >
+                {src ? (
+                  <img
+                    src={src}
+                    alt={file.name}
+                    className="h-12 w-14 shrink-0 rounded object-cover"
+                  />
+                ) : (
+                  <div className="flex h-12 w-14 shrink-0 items-center justify-center rounded bg-slate-100 text-slate-400">
+                    <PaperClipOutlined />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-1">
+                    <div className="min-w-0">
+                      <div className="truncate text-[11px] font-medium text-slate-700">{file.name}</div>
+                      <div className="text-[10px] text-emerald-600">ไฟล์ใหม่</div>
+                    </div>
+                    <Button
+                      type="text"
+                      size="small"
+                      danger
+                      className="!h-5 !min-w-0 !px-1"
+                      disabled={disabled}
+                      onClick={() =>
+                        onFileListChange?.(fileList.filter((item) => item.uid !== file.uid))
+                      }
+                    >
+                      <DeleteOutlined className="text-xs" />
+                    </Button>
+                  </div>
+                  {isImage ? (
+                    <Select
+                      className="mt-1 w-full"
+                      size="small"
+                      disabled={disabled}
+                      value={slotValue}
+                      options={PDF_IMAGE_SLOT_OPTIONS}
+                      onChange={(value) => onNewFileSlotChange?.(file.uid, value)}
+                    />
+                  ) : (
+                    <div className="mt-1 text-[10px] text-slate-400">แนบไฟล์ (ไม่ใส่ PDF)</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
+      <Upload.Dragger
+        multiple
+        maxCount={10}
+        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp"
+        beforeUpload={() => false}
+        fileList={fileList}
+        showUploadList={false}
+        disabled={disabled}
+        onChange={({ fileList: next }) => onFileListChange?.(next)}
+        className="!border-slate-300 !bg-white"
+      >
+        <p className="ant-upload-drag-icon !mb-1 !mt-1">
+          <UploadOutlined className="!text-slate-400" />
+        </p>
+        <p className="ant-upload-text !mb-0 !text-sm !text-slate-600">
+          คลิกหรือลากไฟล์/รูปมาวางเพื่อเพิ่ม
+        </p>
+        <p className="ant-upload-hint !mb-1 !text-xs !text-slate-400">
+          รูปจะถูกบีบอัดอัตโนมัติ · สูงสุด 10 ไฟล์ · ไฟล์ละไม่เกิน 15 MB
+        </p>
+      </Upload.Dragger>
+    </div>
+  );
+}
+
+function splitAttachments(attachments = [], excludeIds = null) {
+  const files = [];
+  const signatures = [];
+  const excluded = excludeIds instanceof Set ? excludeIds : null;
+  for (const attachment of attachments) {
+    if (excluded?.has(Number(attachment.id))) continue;
+    if (String(attachment.kind || "file") === "signature") signatures.push(attachment);
+    else files.push(attachment);
+  }
+  return { files, signatures };
 }
 
 function toUploadFileList(attachments = []) {
@@ -309,19 +950,33 @@ function toUploadFileList(attachments = []) {
   }));
 }
 
-function buildAttachmentFormData(data, fileList, existingAttachments = []) {
+function collectRemovedAttachmentIds(fileList, existingAttachments = []) {
   const retainedIds = new Set(
     fileList
       .filter((item) => item.attachmentId)
       .map((item) => Number(item.attachmentId)),
   );
-  const removedIds = existingAttachments
+  return existingAttachments
     .map((attachment) => Number(attachment.id))
     .filter((id) => !retainedIds.has(id));
-  data.append("remove_attachment_ids", JSON.stringify(removedIds));
+}
+
+function appendUploadFiles(data, fileList, fieldName = "files") {
   for (const item of fileList.filter((file) => !file.attachmentId)) {
-    data.append("files", item.originFileObj || item);
+    data.append(fieldName, item.originFileObj || item);
   }
+}
+
+async function withCompressedUploadList(fileList) {
+  return compressUploadFileList(fileList || []);
+}
+
+function buildAttachmentFormData(data, fileList, existingAttachments = []) {
+  data.append(
+    "remove_attachment_ids",
+    JSON.stringify(collectRemovedAttachmentIds(fileList, existingAttachments)),
+  );
+  appendUploadFiles(data, fileList, "files");
 }
 
 function formValues(record) {
@@ -340,7 +995,7 @@ function formValues(record) {
 
 function ReadOnlyField({ field, record, highlighted }) {
   const [name, label, type] = field;
-  const value = displayValue(record?.[name], type);
+  const value = displayValue(record?.[name], type, name);
   return (
     <Form.Item label={<FieldLabel label={label} required={highlighted} />} className="!mb-3">
       {type === "textarea" ? (
@@ -376,6 +1031,18 @@ export function ComplaintForm({ record, onSaved }) {
   const [deptModalOpen, setDeptModalOpen] = useState(false);
   const [qaConfirmModalOpen, setQaConfirmModalOpen] = useState(false);
   const [fileList, setFileList] = useState([]);
+  const [signatureFileList, setSignatureFileList] = useState([]);
+  const [planForm, setPlanForm] = useState(() => emptyPlanFormState());
+  const [planContributorSigs, setPlanContributorSigs] = useState(() =>
+    Array.from({ length: PLAN_CONTRIBUTOR_DEFAULT }, () => []),
+  );
+  const [planApprovalSigs, setPlanApprovalSigs] = useState(() => ({
+    production_specialist: [],
+    qa_deputy: [],
+  }));
+  const [modalPdfImageSlots, setModalPdfImageSlots] = useState({});
+  const [qaConfirmFileList, setQaConfirmFileList] = useState([]);
+  const [qaConfirmNewFileSlots, setQaConfirmNewFileSlots] = useState({});
   const qaDocumentAccepted = Form.useWatch("document_accepted", qaForm);
 
   const status = record?.workflow_status || "cs_draft";
@@ -389,6 +1056,13 @@ export function ComplaintForm({ record, onSaved }) {
   const responsibleName = record?.responsible_department_name || "หน่วยงานที่รับผิดชอบ";
   const canAcceptAsDepartment =
     status === "pending_department" && isResponsibleDepartmentUser(user, record);
+  const documentAcceptedP = String(record?.document_accepted || "").toUpperCase() === "P";
+  const qaConfirmImageFiles = useMemo(() => {
+    const planSigIds = collectPlanSignatureIds(record?.plan_form_json);
+    return splitAttachments(record?.attachments || [], planSigIds).files.filter((item) =>
+      String(item.mime_type || "").startsWith("image/"),
+    );
+  }, [record?.attachments, record?.plan_form_json]);
 
   useEffect(() => {
     setCsModalOpen(false);
@@ -396,6 +1070,13 @@ export function ComplaintForm({ record, onSaved }) {
     setDeptModalOpen(false);
     setQaConfirmModalOpen(false);
     setFileList([]);
+    setSignatureFileList([]);
+    setPlanForm(emptyPlanFormState());
+    setPlanContributorSigs(Array.from({ length: PLAN_CONTRIBUTOR_DEFAULT }, () => []));
+    setPlanApprovalSigs({ production_specialist: [], qa_deputy: [] });
+    setModalPdfImageSlots({});
+    setQaConfirmFileList([]);
+    setQaConfirmNewFileSlots({});
   }, [record?.id, record?.workflow_status]);
 
   useEffect(() => {
@@ -464,6 +1145,13 @@ export function ComplaintForm({ record, onSaved }) {
       const result = await complaintApi.update(record.id, { action: "confirm" });
       message.success("QA Confirm และปิดงานเรียบร้อย");
       onSaved?.(result.data);
+      if (canShowActionPlanDocument(result.data)) {
+        setTimeout(() => {
+          document
+            .getElementById("action-plan-document")
+            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 250);
+      }
     } catch (error) {
       message.error(error.message || "Confirm ไม่สำเร็จ");
     } finally {
@@ -478,6 +1166,16 @@ export function ComplaintForm({ record, onSaved }) {
       prevention: record.prevention || "",
       remark: record.remark || "",
     });
+    const existing = parsePdfImageSlots(record.plan_form_json);
+    const initial = { ...existing };
+    if (!Object.keys(initial).length) {
+      for (const file of qaConfirmImageFiles) {
+        initial[String(file.id)] = "picture";
+      }
+    }
+    setModalPdfImageSlots(initial);
+    setQaConfirmFileList([]);
+    setQaConfirmNewFileSlots({});
     setQaConfirmModalOpen(true);
   };
 
@@ -485,16 +1183,43 @@ export function ComplaintForm({ record, onSaved }) {
     try {
       const values = await qaConfirmForm.validateFields();
       setSaving(true);
-      const result = await complaintApi.update(record.id, {
-        action: "save",
-        cause: values.cause || "",
-        correction: values.correction || "",
-        prevention: values.prevention || "",
-        remark: values.remark || "",
-      });
-      message.success("บันทึกการแก้ไขแล้ว");
-      setQaConfirmModalOpen(false);
-      onSaved?.(result.data);
+
+      if (documentAcceptedP) {
+        const data = new FormData();
+        data.append("cause", values.cause || "");
+        data.append("correction", values.correction || "");
+        data.append("prevention", values.prevention || "");
+        data.append("remark", values.remark || "");
+        data.append("pdf_image_slots", JSON.stringify(modalPdfImageSlots || {}));
+        data.append(
+          "new_file_slots",
+          JSON.stringify(
+            qaConfirmFileList.map((file) => {
+              if (!String(file.type || "").startsWith("image/")) return "none";
+              return qaConfirmNewFileSlots[file.uid] || "picture";
+            }),
+          ),
+        );
+        data.append("remove_attachment_ids", JSON.stringify([]));
+        appendUploadFiles(data, qaConfirmFileList, "files");
+        const result = await complaintApi.saveQaConfirm(record.id, data);
+        message.success("บันทึกการแก้ไขแล้ว");
+        setQaConfirmModalOpen(false);
+        setQaConfirmFileList([]);
+        setQaConfirmNewFileSlots({});
+        onSaved?.(result.data);
+      } else {
+        const result = await complaintApi.update(record.id, {
+          action: "save",
+          cause: values.cause || "",
+          correction: values.correction || "",
+          prevention: values.prevention || "",
+          remark: values.remark || "",
+        });
+        message.success("บันทึกการแก้ไขแล้ว");
+        setQaConfirmModalOpen(false);
+        onSaved?.(result.data);
+      }
     } catch (error) {
       if (!error?.errorFields) message.error(error.message || "บันทึกการแก้ไขไม่สำเร็จ");
     } finally {
@@ -509,7 +1234,7 @@ export function ComplaintForm({ record, onSaved }) {
       received_date: record.received_date ? dayjs(record.received_date) : dayjs(),
       document_accepted: record.document_accepted || null,
     });
-    setFileList(toUploadFileList(record.attachments || []));
+    setFileList(toUploadFileList(splitAttachments(record.attachments || []).files));
     setCsModalOpen(true);
   };
 
@@ -525,7 +1250,11 @@ export function ComplaintForm({ record, onSaved }) {
       );
       data.append("document_accepted", values.document_accepted || "");
       data.append("action", "submit");
-      buildAttachmentFormData(data, fileList, record.attachments || []);
+      buildAttachmentFormData(
+        data,
+        fileList,
+        splitAttachments(record.attachments || []).files,
+      );
       setSaving(true);
       const result = await complaintApi.submitCs(record.id, data);
       message.success(
@@ -636,7 +1365,14 @@ export function ComplaintForm({ record, onSaved }) {
       completed_date: latest.completed_date ? dayjs(latest.completed_date) : null,
       remark: latest.remark || "",
     });
-    setFileList(toUploadFileList(latest.attachments || []));
+    const planSigIds = collectPlanSignatureIds(latest.plan_form_json);
+    const split = splitAttachments(latest.attachments || [], planSigIds);
+    setFileList(toUploadFileList(split.files));
+    setSignatureFileList(toUploadFileList(split.signatures));
+    setPlanForm(normalizePlanFormState(latest.plan_form_json));
+    const planSigs = planSignatureListsFromRecord(latest);
+    setPlanContributorSigs(planSigs.contributorSigs);
+    setPlanApprovalSigs(planSigs.approvalSigs);
     setDeptModalOpen(true);
   };
 
@@ -656,7 +1392,49 @@ export function ComplaintForm({ record, onSaved }) {
       );
       data.append("remark", values.remark || "");
       data.append("action", action);
-      buildAttachmentFormData(data, fileList, record.attachments || []);
+      const planSigIds = collectPlanSignatureIds(record.plan_form_json);
+      const split = splitAttachments(record.attachments || [], planSigIds);
+      const removedIds = [
+        ...collectRemovedAttachmentIds(fileList, split.files),
+        ...collectRemovedAttachmentIds(signatureFileList, split.signatures),
+      ];
+      data.append("remove_attachment_ids", JSON.stringify(removedIds));
+      appendUploadFiles(data, fileList, "files");
+      appendUploadFiles(data, signatureFileList, "signatures");
+
+      const planPayload = {
+        contributors: planForm.contributors.map((row, index) => ({
+          name: row.name,
+          position: row.position,
+          signatureId: planContributorSigs[index]?.[0]?.attachmentId || null,
+        })),
+        approvals: {
+          production_specialist: {
+            signatureId: planApprovalSigs.production_specialist?.[0]?.attachmentId || null,
+          },
+          qa_deputy: {
+            signatureId: planApprovalSigs.qa_deputy?.[0]?.attachmentId || null,
+          },
+        },
+      };
+      data.append("plan_form", JSON.stringify(planPayload));
+      planContributorSigs.forEach((list, index) => {
+        const file = list?.[0];
+        if (file && !file.attachmentId) {
+          data.append(`plan_sig_contributor_${index}`, file.originFileObj || file);
+        }
+      });
+      for (const role of PLAN_APPROVAL_ROLES) {
+        const file = planApprovalSigs[role.key]?.[0];
+        if (file && !file.attachmentId) {
+          const field =
+            role.key === "production_specialist"
+              ? "plan_sig_approval_production"
+              : "plan_sig_approval_qa";
+          data.append(field, file.originFileObj || file);
+        }
+      }
+
       setSaving(true);
       const result = await complaintApi.submitDepartment(record.id, data);
       message.success(
@@ -667,8 +1445,19 @@ export function ComplaintForm({ record, onSaved }) {
       if (action === "submit") {
         setDeptModalOpen(false);
         setFileList([]);
+        setSignatureFileList([]);
+        setPlanForm(emptyPlanFormState());
+        setPlanContributorSigs(Array.from({ length: PLAN_CONTRIBUTOR_DEFAULT }, () => []));
+        setPlanApprovalSigs({ production_specialist: [], qa_deputy: [] });
       } else {
-        setFileList(toUploadFileList(result.data?.attachments || []));
+        const nextPlanSigIds = collectPlanSignatureIds(result.data?.plan_form_json);
+        const nextSplit = splitAttachments(result.data?.attachments || [], nextPlanSigIds);
+        setFileList(toUploadFileList(nextSplit.files));
+        setSignatureFileList(toUploadFileList(nextSplit.signatures));
+        setPlanForm(normalizePlanFormState(result.data?.plan_form_json));
+        const planSigs = planSignatureListsFromRecord(result.data || {});
+        setPlanContributorSigs(planSigs.contributorSigs);
+        setPlanApprovalSigs(planSigs.approvalSigs);
       }
       onSaved?.(result.data);
     } catch (error) {
@@ -731,6 +1520,11 @@ export function ComplaintForm({ record, onSaved }) {
             type="success"
             showIcon
             message={`ปิดงานแล้ว${record.confirmed_by_name ? ` โดย ${record.confirmed_by_name}` : ""}`}
+            description={
+              canShowActionPlanDocument(record)
+                ? "เอกสาร Action Plan พร้อมดาวน์โหลดด้านล่างสุดของหน้านี้"
+                : undefined
+            }
           />
         ) : null}
       </Card>
@@ -839,16 +1633,41 @@ export function ComplaintForm({ record, onSaved }) {
                 })}
               </div>
               {section.key === "quality" ? (
-                <div className="mt-2 border-t border-slate-100 pt-4">
-                  <Typography.Title level={5} className="!mb-3">
-                    ไฟล์แนบ
-                  </Typography.Title>
-                  <AttachmentGallery attachments={record.attachments || []} />
-                </div>
+                (() => {
+                  const planSigIds = collectPlanSignatureIds(record.plan_form_json);
+                  const split = splitAttachments(record.attachments || [], planSigIds);
+                  return (
+                    <div className="mt-2 grid grid-cols-1 gap-4 border-t border-slate-100 pt-4 sm:grid-cols-2">
+                      <div className={split.signatures.length ? "" : "sm:col-span-2"}>
+                        <Typography.Title level={5} className="!mb-3">
+                          รูปภาพหรือไฟล์แนบ
+                        </Typography.Title>
+                        <AttachmentGallery attachments={split.files} />
+                      </div>
+                      {split.signatures.length ? (
+                        <div>
+                          <Typography.Title level={5} className="!mb-3">
+                            ลายเซ็น
+                          </Typography.Title>
+                          <AttachmentGallery
+                            attachments={split.signatures}
+                            emptyText="ยังไม่มีลายเซ็น"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })()
               ) : null}
             </Card>
           );
         })}
+        <Card size="small" title={<Typography.Text>ผู้ร่วมจัดทำแผน / ลายเซ็นผู้อนุมัติ</Typography.Text>}>
+          <PlanContributorsView record={record} />
+        </Card>
+        {canShowActionPlanDocument(record) ? (
+          <ActionPlanDocument record={record} />
+        ) : null}
       </div>
 
       <Modal
@@ -903,10 +1722,10 @@ export function ComplaintForm({ record, onSaved }) {
             </Form.Item>
             <Form.Item
               name="document_accepted"
-            label="เอกสาร (รับ/ไม่รับ)"
-            className="!mb-3"
-            rules={[{ required: true, message: "กรุณาเลือก O หรือ P" }]}
-          >
+              label="เอกสาร Action plan"
+              className="!mb-3"
+              rules={[{ required: true, message: "กรุณาเลือกรับหรือไม่รับเอกสาร" }]}
+            >
               <Radio.Group
                 optionType="button"
                 buttonStyle="solid"
@@ -917,14 +1736,16 @@ export function ComplaintForm({ record, onSaved }) {
           <Form.Item
             label="รูปภาพหรือไฟล์แนบ"
             className="!mb-0"
-            extra="สูงสุด 10 ไฟล์ · ไฟล์ละไม่เกิน 15 MB"
+            extra="รูปจะถูกบีบอัดอัตโนมัติ · สูงสุด 10 ไฟล์ · ไฟล์ละไม่เกิน 15 MB"
           >
             <Upload.Dragger
               multiple
               maxCount={10}
               beforeUpload={() => false}
               fileList={fileList}
-              onChange={({ fileList: next }) => setFileList(next)}
+              onChange={async ({ fileList: next }) => {
+                setFileList(await withCompressedUploadList(next));
+              }}
               style={{ padding: "4px 0" }}
             >
               <p className="ant-upload-drag-icon !mb-1">
@@ -961,10 +1782,10 @@ export function ComplaintForm({ record, onSaved }) {
         <Form form={qaForm} layout="vertical">
           <Form.Item
             name="document_accepted"
-            label="เอกสาร (รับ/ไม่รับ)"
+            label="เอกสาร Action plan"
             className="!mb-3"
-            rules={[{ required: true, message: "กรุณาเลือก O หรือ P" }]}
-            extra="QA สามารถเปลี่ยนจาก O เป็น P ได้ — ถ้าเป็น P (รับเอกสาร) จะมีขั้นตอนหน่วยงาน"
+            rules={[{ required: true, message: "กรุณาเลือกรับหรือไม่รับเอกสาร" }]}
+            extra="QA สามารถเปลี่ยนจากไม่รับเป็นรับได้ — ถ้ารับเอกสาร จะมีขั้นตอนหน่วยงาน"
           >
             <Radio.Group
               optionType="button"
@@ -1029,9 +1850,9 @@ export function ComplaintForm({ record, onSaved }) {
         open={deptModalOpen}
         onCancel={() => !saving && setDeptModalOpen(false)}
         destroyOnHidden
-        width={1100}
+        width={1200}
         centered
-        styles={{ body: { paddingTop: 8, paddingBottom: 4 } }}
+        styles={{ body: { paddingTop: 8, paddingBottom: 4, maxHeight: "75vh", overflowY: "auto" } }}
         footer={[
           <Button key="cancel" disabled={saving} onClick={() => setDeptModalOpen(false)}>
             ยกเลิก
@@ -1120,26 +1941,40 @@ export function ComplaintForm({ record, onSaved }) {
               <Input.TextArea autoSize={{ minRows: 1, maxRows: 2 }} />
             </Form.Item>
           </div>
-          <Form.Item
-            label="รูปภาพหรือไฟล์แนบ"
-            className="!mb-0"
-            extra="สูงสุด 10 ไฟล์ · ไฟล์ละไม่เกิน 15 MB"
-          >
-            <Upload.Dragger
-              multiple
-              maxCount={10}
-              beforeUpload={() => false}
-              fileList={fileList}
-              onChange={({ fileList: next }) => setFileList(next)}
-              style={{ padding: "2px 0" }}
-              className="!py-1"
+          <div className="grid grid-cols-1 gap-x-4">
+            <Form.Item
+              label="รูปภาพหรือไฟล์แนบ"
+              className="!mb-3"
+              extra="รูปจะถูกบีบอัดอัตโนมัติ · สูงสุด 10 ไฟล์ · ไฟล์ละไม่เกิน 15 MB"
             >
-              <p className="ant-upload-drag-icon !mb-0 !mt-1">
-                <UploadOutlined />
-              </p>
-              <p className="ant-upload-text !mb-1 !text-sm">คลิกหรือลากไฟล์มาวางที่นี่</p>
-            </Upload.Dragger>
-          </Form.Item>
+              <Upload.Dragger
+                multiple
+                maxCount={10}
+                beforeUpload={() => false}
+                fileList={fileList}
+                onChange={async ({ fileList: next }) => {
+                  setFileList(await withCompressedUploadList(next));
+                }}
+                style={{ padding: "2px 0" }}
+                className="!py-1"
+              >
+                <p className="ant-upload-drag-icon !mb-0 !mt-1">
+                  <UploadOutlined />
+                </p>
+                <p className="ant-upload-text !mb-1 !text-sm">คลิกหรือลากไฟล์มาวางที่นี่</p>
+              </Upload.Dragger>
+            </Form.Item>
+          </div>
+          <div className="!mb-0">
+            <PlanContributorsForm
+              planForm={planForm}
+              onPlanFormChange={setPlanForm}
+              contributorSigs={planContributorSigs}
+              onContributorSigsChange={setPlanContributorSigs}
+              approvalSigs={planApprovalSigs}
+              onApprovalSigsChange={setPlanApprovalSigs}
+            />
+          </div>
         </Form>
       </Modal>
 
@@ -1172,20 +2007,52 @@ export function ComplaintForm({ record, onSaved }) {
           message={`PDR: ${record.pdr_no || "-"} — แก้ไขได้ถ้าต้องการ จากนั้นกด Confirm เพื่อปิดงาน`}
         />
         <Form form={qaConfirmForm} layout="vertical">
-          <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-3">
             <Form.Item name="cause" label="สาเหตุ" className="!mb-2">
-              <Input.TextArea autoSize={{ minRows: 5, maxRows: 8 }} />
+              <Input.TextArea autoSize={{ minRows: 3, maxRows: 6 }} placeholder="สาเหตุ" />
             </Form.Item>
             <Form.Item name="correction" label="แก้ไข" className="!mb-2">
-              <Input.TextArea autoSize={{ minRows: 5, maxRows: 8 }} />
+              <Input.TextArea autoSize={{ minRows: 3, maxRows: 6 }} placeholder="แก้ไข" />
             </Form.Item>
             <Form.Item name="prevention" label="ป้องกัน" className="!mb-2">
-              <Input.TextArea autoSize={{ minRows: 5, maxRows: 8 }} />
+              <Input.TextArea autoSize={{ minRows: 3, maxRows: 6 }} placeholder="ป้องกัน" />
             </Form.Item>
           </div>
-          <Form.Item name="remark" label="หมายเหตุ" className="!mb-0">
-            <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} />
+          <Form.Item name="remark" label="หมายเหตุ" className="!mb-3">
+            <Input.TextArea autoSize={{ minRows: 2, maxRows: 3 }} placeholder="หมายเหตุ" />
           </Form.Item>
+          {documentAcceptedP ? (
+            <QaPdfImageAssigner
+              attachments={qaConfirmImageFiles}
+              pdfImageSlots={modalPdfImageSlots}
+              onPdfSlotChange={(attachmentId, slot) => {
+                setModalPdfImageSlots((prev) => ({
+                  ...prev,
+                  [String(attachmentId)]: slot,
+                }));
+              }}
+              fileList={qaConfirmFileList}
+              onFileListChange={async (next) => {
+                const compressed = await withCompressedUploadList(next);
+                setQaConfirmFileList(compressed);
+                setQaConfirmNewFileSlots((prev) => {
+                  const nextSlots = { ...prev };
+                  for (const file of compressed) {
+                    if (!nextSlots[file.uid]) nextSlots[file.uid] = "picture";
+                  }
+                  for (const uid of Object.keys(nextSlots)) {
+                    if (!compressed.some((file) => file.uid === uid)) delete nextSlots[uid];
+                  }
+                  return nextSlots;
+                });
+              }}
+              newFileSlots={qaConfirmNewFileSlots}
+              onNewFileSlotChange={(uid, slot) => {
+                setQaConfirmNewFileSlots((prev) => ({ ...prev, [uid]: slot }));
+              }}
+              disabled={saving}
+            />
+          ) : null}
         </Form>
       </Modal>
     </Form>

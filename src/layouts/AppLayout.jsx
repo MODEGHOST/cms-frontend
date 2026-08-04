@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Avatar, Button, Drawer, Menu, Tooltip } from "antd";
 import {
   DashboardOutlined,
@@ -14,9 +14,10 @@ import {
 } from "@ant-design/icons";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
+import { complaintApi } from "../services/api";
 import { canManageSystem } from "../utils/authz";
 
-function buildNavGroups(user) {
+function buildNavGroups(user, complaintInboxCount = 0) {
   const systemChildren = [
     { key: "/activity-logs", icon: <HistoryOutlined />, label: "Activity Log" },
     { key: "/masters", icon: <DatabaseOutlined />, label: "Master Data" },
@@ -28,6 +29,12 @@ function buildNavGroups(user) {
       label: "สมาชิกและสิทธิ์",
     });
   }
+
+  const complaintListLabel =
+    complaintInboxCount > 0
+      ? `รายการ Complaint (${complaintInboxCount})`
+      : "รายการ Complaint";
+
   return [
     {
       key: "reject",
@@ -50,8 +57,8 @@ function buildNavGroups(user) {
         {
           key: "/complaints",
           icon: <FileSearchOutlined />,
-          label: "รายการ Complaint",
-          disabled: true,
+          label: complaintListLabel,
+          pageTitle: "รายการ Complaint",
         },
         {
           key: "/complaint-form",
@@ -208,6 +215,7 @@ export function AppLayout() {
   const navigate = useNavigate();
   const { user, logout } = useSession();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [complaintInboxCount, setComplaintInboxCount] = useState(0);
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return localStorage.getItem(SIDEBAR_STORAGE_KEY) === "1";
@@ -215,6 +223,15 @@ export function AppLayout() {
       return false;
     }
   });
+
+  const refreshComplaintInboxCount = useCallback(async () => {
+    try {
+      const result = await complaintApi.inboxCount();
+      setComplaintInboxCount(Number(result?.total || 0));
+    } catch {
+      // keep last known count if refresh fails
+    }
+  }, []);
 
   useEffect(() => {
     try {
@@ -224,16 +241,26 @@ export function AppLayout() {
     }
   }, [collapsed]);
 
+  useEffect(() => {
+    refreshComplaintInboxCount();
+    const timer = window.setInterval(refreshComplaintInboxCount, 60_000);
+    return () => window.clearInterval(timer);
+  }, [refreshComplaintInboxCount, location.pathname]);
+
   const sidebarWidth = collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
 
-  const navGroups = useMemo(() => buildNavGroups(user), [user]);
+  const navGroups = useMemo(
+    () => buildNavGroups(user, complaintInboxCount),
+    [user, complaintInboxCount],
+  );
   const navItems = useMemo(
     () => navGroups.flatMap((group) => group.children),
     [navGroups],
   );
 
   const title = useMemo(() => {
-    return navItems.find((item) => item.key === location.pathname)?.label || "CMS";
+    const item = navItems.find((entry) => entry.key === location.pathname);
+    return item?.pageTitle || item?.label || "CMS";
   }, [location.pathname, navItems]);
 
   const onLogout = async () => {

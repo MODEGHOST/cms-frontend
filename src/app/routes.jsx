@@ -6,6 +6,7 @@ import { DashboardPage } from "../pages/DashboardPage";
 import { RejectsPage } from "../pages/RejectsPage";
 import { RejectFormPage } from "../pages/RejectFormPage";
 import { ComplaintDashboardPage } from "../pages/ComplaintDashboardPage";
+import { ComplaintsPage } from "../pages/ComplaintsPage";
 import { ComplaintFormPage } from "../pages/ComplaintFormPage";
 import { ActivityLogsPage } from "../pages/ActivityLogsPage";
 import { MastersPage } from "../pages/MastersPage";
@@ -37,6 +38,7 @@ export function AppRoutes() {
           <Route path="/rejects" element={<RejectsPage />} />
           <Route path="/reject-form" element={<RejectFormPage />} />
           <Route path="/complaint-dashboard" element={<ComplaintDashboardPage />} />
+          <Route path="/complaints" element={<ComplaintsPage />} />
           <Route path="/complaint-form" element={<ComplaintFormPage />} />
           <Route path="/activity-logs" element={<ActivityLogsPage />} />
           <Route path="/masters" element={<MastersPage />} />
