@@ -6,7 +6,7 @@ export function RequireAuth() {
   const { isAuthenticated, loading } = useSession();
   const location = useLocation();
 
-  if (loading) {
+  if (!isAuthenticated && loading) {
     return (
       <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
         <Spin size="large" />
@@ -15,7 +15,8 @@ export function RequireAuth() {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+    const returnTo = `${location.pathname}${location.search}${location.hash}`;
+    return <Navigate to="/login" replace state={{ from: returnTo }} />;
   }
 
   return <Outlet />;

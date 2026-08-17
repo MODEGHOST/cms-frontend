@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   App,
@@ -15,6 +15,7 @@ import {
   Tag,
 } from "antd";
 import {
+  ApartmentOutlined,
   KeyOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -25,8 +26,13 @@ import {
 import { Navigate } from "react-router-dom";
 import { PageHeader } from "../components/ui/PageHeader";
 import { useSession } from "../hooks/useSession";
-import { systemApi } from "../services/api";
+import { masterApi, systemApi } from "../services/api";
 import { canManageSystem } from "../utils/authz";
+import {
+  STAFF_BASE_PERMISSIONS,
+  WORKFLOW_PERMISSION_LABELS,
+  listDepartmentWorkMatrix,
+} from "../utils/departmentPermissions";
 
 const PERMISSION_GROUP_LABELS = {
   activity: "Activity Log",
@@ -42,12 +48,14 @@ const PERMISSION_GROUP_LABELS = {
 const ROLE_TAG_COLOR = {
   developer: "purple",
   admin: "red",
-  qc: "blue",
-  qa: "cyan",
-  cs: "geekblue",
-  department: "default",
+  staff: "blue",
   viewer: "default",
 };
+
+const LEGACY_WORKFLOW_ROLE_NAMES = new Set(["cs", "qa", "qc", "department"]);
+
+const ALL_DEPARTMENTS_KEY = "__all__";
+const NO_DEPARTMENT_KEY = "__none__";
 
 function MembersPanel({ roles }) {
   const { message, modal } = App.useApp();
@@ -56,28 +64,108 @@ function MembersPanel({ roles }) {
   const [savingId, setSavingId] = useState(null);
   const [members, setMembers] = useState([]);
   const [q, setQ] = useState("");
+  const [departmentFilter, setDepartmentFilter] = useState(ALL_DEPARTMENTS_KEY);
+  const [departmentFacets, setDepartmentFacets] = useState([]);
+  const [memberPaging, setMemberPaging] = useState({ page: 1, pageSize: 6, total: 0 });
   const [addOpen, setAddOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [current, setCurrent] = useState(null);
   const [candidates, setCandidates] = useState([]);
+  const [departmentOptions, setDepartmentOptions] = useState([]);
   const [saving, setSaving] = useState(false);
   const [addForm] = Form.useForm();
   const [profileForm] = Form.useForm();
+  const watchedAddRoles = Form.useWatch("roles", addForm);
+  const departmentFilterRef = useRef(departmentFilter);
 
   const roleOptions = useMemo(
     () =>
-      (roles || []).map((role) => ({
-        value: role.name,
-        label: role.label || role.name,
-      })),
+      (roles || [])
+        .filter((role) => !LEGACY_WORKFLOW_ROLE_NAMES.has(role.name))
+        .map((role) => ({
+          value: role.name,
+          label: role.label || role.name,
+        })),
     [roles],
   );
 
-  async function loadMembers(search = q) {
+  const departmentTabItems = useMemo(() => {
+    const items = [{ key: ALL_DEPARTMENTS_KEY, label: "ทั้งหมด" }];
+    for (const row of departmentFacets) {
+      if (!row.department) {
+        items.push({ key: NO_DEPARTMENT_KEY, label: "ไม่มีแผนก" });
+      } else {
+        items.push({ key: row.department, label: row.department });
+      }
+    }
+    return items;
+  }, [departmentFacets]);
+
+  useEffect(() => {
+    departmentFilterRef.current = departmentFilter;
+  }, [departmentFilter]);
+
+  useEffect(() => {
+    masterApi
+      .list("departments", { pageSize: 200 })
+      .then((result) => {
+        setDepartmentOptions(
+          (result.data || [])
+            .filter((row) => Number(row.is_active) !== 0)
+            .map((row) => ({ value: row.name, label: row.name })),
+        );
+      })
+      .catch(() => {});
+  }, []);
+
+  async function loadMembers({
+    search = q,
+    page = memberPaging.page,
+    pageSize = memberPaging.pageSize,
+    department = departmentFilterRef.current,
+  } = {}) {
     setLoading(true);
     try {
-      const result = await systemApi.listMembers({ q: search || undefined });
+      const result = await systemApi.listMembers({
+        q: search || undefined,
+        department: department === ALL_DEPARTMENTS_KEY ? undefined : department,
+        page,
+        pageSize,
+      });
+      const facets = result.departments || [];
+      const filterStillValid =
+        department === ALL_DEPARTMENTS_KEY ||
+        facets.some((row) =>
+          department === NO_DEPARTMENT_KEY
+            ? !row.department
+            : row.department === department,
+        );
+
+      if (!filterStillValid) {
+        setDepartmentFilter(ALL_DEPARTMENTS_KEY);
+        departmentFilterRef.current = ALL_DEPARTMENTS_KEY;
+        const allResult = await systemApi.listMembers({
+          q: search || undefined,
+          page: 1,
+          pageSize,
+        });
+        setMembers(allResult.data || []);
+        setDepartmentFacets(allResult.departments || []);
+        setMemberPaging({
+          page: allResult.pagination?.page || 1,
+          pageSize: allResult.pagination?.pageSize || pageSize,
+          total: allResult.pagination?.total || 0,
+        });
+        return;
+      }
+
       setMembers(result.data || []);
+      setDepartmentFacets(facets);
+      setMemberPaging({
+        page: result.pagination?.page || page,
+        pageSize: result.pagination?.pageSize || pageSize,
+        total: result.pagination?.total || 0,
+      });
     } catch (error) {
       message.error(error.message);
     } finally {
@@ -86,13 +174,18 @@ function MembersPanel({ roles }) {
   }
 
   useEffect(() => {
-    loadMembers();
+    loadMembers({ page: 1 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function updateRoles(userId, nextRoles) {
     if (!nextRoles?.length) {
       message.error("ต้องมีอย่างน้อย 1 role");
+      return;
+    }
+    const member = members.find((row) => row.id === userId);
+    if (nextRoles.includes("staff") && !member?.department) {
+      message.error("Role พนักงานต้องระบุแผนกก่อน — แก้ที่โปรไฟล์");
       return;
     }
     setSavingId(userId);
@@ -124,7 +217,7 @@ function MembersPanel({ roles }) {
 
   async function openAdd() {
     addForm.resetFields();
-    addForm.setFieldsValue({ roles: ["viewer"] });
+    addForm.setFieldsValue({ roles: ["staff"] });
     setAddOpen(true);
     try {
       const result = await systemApi.listCenterUsers({ without_membership: 1 });
@@ -210,8 +303,32 @@ function MembersPanel({ roles }) {
     });
   }
 
+  function onDepartmentTabChange(key) {
+    setDepartmentFilter(key);
+    departmentFilterRef.current = key;
+    loadMembers({ search: q, page: 1, department: key });
+  }
+
   return (
     <>
+      <div className="members-department-tabs mb-3" role="tablist" aria-label="กรองตามแผนก">
+        {departmentTabItems.map((tab) => {
+          const active = departmentFilter === tab.key;
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              className={`members-department-tab${active ? " is-active" : ""}`}
+              onClick={() => onDepartmentTabChange(tab.key)}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <Space.Compact className="min-w-[260px] flex-1">
           <Input
@@ -219,9 +336,9 @@ function MembersPanel({ roles }) {
             placeholder="ค้นหา username / ชื่อ / อีเมล"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            onPressEnter={() => loadMembers()}
+            onPressEnter={() => loadMembers({ search: q, page: 1 })}
           />
-          <Button onClick={() => loadMembers()}>ค้นหา</Button>
+          <Button onClick={() => loadMembers({ search: q, page: 1 })}>ค้นหา</Button>
         </Space.Compact>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={() => loadMembers()}>
@@ -240,10 +357,14 @@ function MembersPanel({ roles }) {
           dataSource={members}
           scroll={{ x: 1000 }}
           pagination={{
-            pageSize: 6,
+            current: memberPaging.page,
+            pageSize: memberPaging.pageSize,
+            total: memberPaging.total,
             showSizeChanger: false,
             showTotal: (total, range) =>
               `${range[0]}-${range[1]} จาก ${total} รายการ`,
+            onChange: (page, pageSize) =>
+              loadMembers({ search: q, page, pageSize }),
           }}
           columns={[
             {
@@ -378,12 +499,28 @@ function MembersPanel({ roles }) {
               placeholder="ค้นหาและเลือกผู้ใช้"
             />
           </Form.Item>
-          <Form.Item name="department" label="แผนก (ใช้ใน workflow)">
-            <Input placeholder="เช่น QC, CS, PD" />
+          <Form.Item
+            name="department"
+            label="แผนก"
+            extra="สิทธิ์งาน Complaint/Reject มาจากแผนก (เช่น MKT → CS, QA → QA)"
+            rules={
+              (watchedAddRoles || []).includes("staff")
+                ? [{ required: true, message: "พนักงานต้องเลือกแผนก" }]
+                : []
+            }
+          >
+            <Select
+              showSearch
+              allowClear
+              optionFilterProp="label"
+              placeholder="เลือกแผนกจาก Master"
+              options={departmentOptions}
+            />
           </Form.Item>
           <Form.Item
             name="roles"
             label="Role"
+            extra="ระดับสิทธิ์เท่านั้น — ไม่ใช่แผนก"
             rules={[{ required: true, message: "กรุณาเลือก Role" }]}
           >
             <Select mode="multiple" options={roleOptions} />
@@ -405,12 +542,153 @@ function MembersPanel({ roles }) {
           <Form.Item name="display_name" label="ชื่อที่แสดง">
             <Input />
           </Form.Item>
-          <Form.Item name="department" label="แผนก">
-            <Input placeholder="เช่น QC, CS, PD" />
+          <Form.Item
+            name="department"
+            label="แผนก"
+            extra="ใช้ใน workflow และ Auto หน่วยงานที่แจ้งปัญหา (ตอน CS ส่งเรื่อง)"
+            rules={
+              (current?.roles || []).includes("staff")
+                ? [{ required: true, message: "พนักงานต้องเลือกแผนก" }]
+                : []
+            }
+          >
+            <Select
+              showSearch
+              allowClear
+              optionFilterProp="label"
+              placeholder="เลือกแผนกจาก Master"
+              options={departmentOptions}
+            />
           </Form.Item>
         </Form>
       </Modal>
     </>
+  );
+}
+
+function DepartmentWorkPanel({ permissions }) {
+  const matrix = useMemo(() => listDepartmentWorkMatrix(), []);
+  const permissionLabelByCode = useMemo(() => {
+    const map = {};
+    for (const permission of permissions || []) {
+      map[permission.code] = permission.description || permission.code;
+    }
+    return map;
+  }, [permissions]);
+
+  const groups = useMemo(() => {
+    const byCode = {};
+    for (const code of Object.keys(WORKFLOW_PERMISSION_LABELS)) {
+      byCode[code] = [];
+    }
+    for (const row of matrix) {
+      for (const code of row.permissions || []) {
+        if (!byCode[code]) byCode[code] = [];
+        byCode[code].push(row.department);
+      }
+    }
+    return Object.entries(WORKFLOW_PERMISSION_LABELS).map(([code, label]) => ({
+      code,
+      label,
+      departments: byCode[code] || [],
+    }));
+  }, [matrix]);
+
+  return (
+    <div className="space-y-4">
+      <Alert
+        type="info"
+        showIcon
+        message="สิทธิ์งานของ Role พนักงาน"
+        description="กำหนดจากแผนกที่สังกัดอัตโนมัติ — ไม่ต้องติ๊กทีละคน แก้กฎในระบบแล้วแผนกทุกคนในแผนกนั้นได้สิทธิ์ตามนี้"
+      />
+
+      <Card className="rounded-2xl shadow-sm">
+        <div className="mb-3">
+          <div className="text-base font-semibold text-slate-800">
+            สิทธิ์พื้นฐานของพนักงาน
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1">
+            {STAFF_BASE_PERMISSIONS.map((code) => (
+              <Tag key={code} className="!mr-0">
+                {permissionLabelByCode[code] || code}
+              </Tag>
+            ))}
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {groups.map((group) => (
+          <Card key={group.code} className="rounded-2xl shadow-sm" size="small">
+            <div className="mb-2 font-semibold text-slate-800">{group.label}</div>
+            <div className="mb-2 text-xs text-slate-400">{group.code}</div>
+            <div className="flex flex-wrap gap-1.5">
+              {group.departments.length ? (
+                group.departments.map((dept) => (
+                  <Tag key={dept} color="blue" className="!mr-0">
+                    {dept}
+                  </Tag>
+                ))
+              ) : (
+                <span className="text-sm text-slate-400">ยังไม่มีแผนก</span>
+              )}
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <Card className="rounded-2xl shadow-sm">
+        <div className="mb-3 text-base font-semibold text-slate-800">
+          รายการทุกแผนก
+        </div>
+        <Table
+          rowKey="department"
+          size="small"
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            pageSizeOptions: [10, 20, 50],
+            showTotal: (total, range) =>
+              `${range[0]}-${range[1]} จาก ${total} แผนก`,
+          }}
+          dataSource={matrix}
+          columns={[
+            {
+              title: "แผนก",
+              dataIndex: "department",
+              width: 120,
+              render: (value) => (
+                <span className="font-medium text-slate-800">{value}</span>
+              ),
+            },
+            {
+              title: "สิทธิ์งานที่ได้",
+              dataIndex: "work_summary",
+              render: (value, row) =>
+                row.permissions?.length ? (
+                  <div className="flex flex-wrap gap-1">
+                    {row.labels.map((label, index) => (
+                      <Tag key={`${row.department}-${index}`} color="blue">
+                        {label}
+                      </Tag>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-slate-400">{value}</span>
+                ),
+            },
+            {
+              title: "รหัส",
+              key: "codes",
+              width: 220,
+              render: (_, row) =>
+                row.permissions?.length ? row.permissions.join(", ") : "-",
+            },
+          ]}
+        />
+      </Card>
+    </div>
   );
 }
 
@@ -723,6 +1001,15 @@ export function SystemPage() {
         />
       ),
     },
+    {
+      key: "department-work",
+      label: (
+        <span>
+          <ApartmentOutlined /> สิทธิ์ตามแผนก
+        </span>
+      ),
+      children: <DepartmentWorkPanel permissions={permissions} />,
+    },
   ];
 
   return (
@@ -736,7 +1023,7 @@ export function SystemPage() {
           </Button>
         }
       />
-      <Tabs items={items} />
+      <Tabs destroyOnHidden items={items} />
     </div>
   );
 }

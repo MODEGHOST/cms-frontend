@@ -37,30 +37,130 @@ import {
 } from "recharts";
 import { dashboardApi } from "../services/api";
 import { useSession } from "../hooks/useSession";
+import { CompanyPulse } from "../components/dashboard/CompanyPulse";
 import { DashboardFilterModal } from "../components/dashboard/DashboardFilterModal";
 import { MachineComparisonPanel } from "../components/dashboard/MachineComparisonPanel";
+import { OrderRateComparisonTable } from "../components/dashboard/OrderRateComparisonTable";
+import { DeptTargetRateTable } from "../components/dashboard/DeptTargetRateTable";
+import { RejectSummaryTable } from "../components/dashboard/RejectSummaryTable";
 import {
   BAR_COLORS,
   DetailList,
   HorizontalRankChart,
   KpiTile,
+  LazyMount,
   PIE_COLORS,
   Panel,
+  SectionJumpFab,
+  SectionJumpNav,
   SectionTitle,
   VerticalRankChart,
   YAxisTick,
 } from "../components/dashboard/primitives";
 import { colorForKey, colorsForKeys } from "../utils/colors";
-import { cacheGet, cacheGetOrSet, cacheKey, cacheSet } from "../utils/dashboardCache";
+import { cacheGetOrSet, cacheKey } from "../utils/dashboardCache";
+import { formatDate, formatDateRange, formatTodayWithWeekday } from "../utils/datetime";
 import { money, pct, qty } from "../utils/format";
+
+const SECTION_JUMPS = [
+  { id: "reject-overview", label: "1. ภาพรวม" },
+  { id: "reject-rate-target", label: "2. % ใบสั่ง · Target" },
+  { id: "reject-claim-share", label: "3. สัดส่วนแผ่น" },
+  { id: "reject-top", label: "4. ปัญหา · ลูกค้า" },
+  { id: "reject-trend-dims", label: "5. แนวโน้มมิติ" },
+  { id: "reject-trend-time", label: "6. แนวโน้มเวลา" },
+  { id: "reject-machines", label: "7. เครื่องจักร" },
+];
 
 const PERIODS = [
   { value: "day", label: "วันนี้" },
   { value: "week", label: "สัปดาห์นี้" },
   { value: "month", label: "เดือนนี้" },
+  { value: "last_month", label: "เดือนที่แล้ว" },
   { value: "all", label: "ทั้งหมด" },
 ];
 
+function FocusRankList({ title, items, tone = "red", valueKey = "claim_sheet_qty", onSelect }) {
+  const tones = {
+    red: {
+      badgeTop: "bg-red-700 text-white",
+      badgeRest: "bg-slate-200 text-slate-700",
+      rowTop: "border-red-300 bg-red-50",
+      rowRest: "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white",
+      value: "text-red-700",
+    },
+    orange: {
+      badgeTop: "bg-orange-600 text-white",
+      badgeRest: "bg-slate-200 text-slate-700",
+      rowTop: "border-orange-300 bg-orange-50",
+      rowRest: "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white",
+      value: "text-orange-700",
+    },
+  };
+  const t = tones[tone] || tones.red;
+
+  return (
+    <div>
+      <div className="mb-2 text-[12px] font-semibold text-slate-700">{title}</div>
+      <div className="space-y-2">
+        {items.map((item, index) => {
+          const isTop = index === 0;
+          const sheets = Number(item[valueKey] || item.claim_sheet_qty || 0);
+          const amount = Number(item.reject_amount || 0);
+          const relatedProblems = item.topProblems || [];
+          const relatedDepartments = item.topDepartments || [];
+          const relatedLabel = relatedProblems.length
+            ? `ปัญหา: ${relatedProblems.map((row) => row.name).join(", ")}`
+            : relatedDepartments.length
+              ? `แผนก: ${relatedDepartments.map((row) => row.name).join(", ")}`
+              : null;
+          return (
+            <button
+              key={item.id || item.name}
+              type="button"
+              onClick={() => onSelect?.(item)}
+              className={`flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition ${
+                isTop ? t.rowTop : t.rowRest
+              }`}
+            >
+              <span
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
+                  isTop ? t.badgeTop : t.badgeRest
+                }`}
+              >
+                {index + 1}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div
+                  className={`truncate font-semibold text-slate-900 ${
+                    isTop ? "text-[15px]" : "text-[13px]"
+                  }`}
+                >
+                  {item.name}
+                </div>
+                <div className="text-[11px] tabular-nums text-slate-500">
+                  จาก {qty(item.count, 0)} ครั้ง
+                  {amount > 0 ? ` · ${money(amount)} บาท` : ""}
+                </div>
+                {relatedLabel ? (
+                  <div className="mt-0.5 truncate text-[11px] font-medium text-slate-600">
+                    {relatedLabel}
+                  </div>
+                ) : null}
+              </div>
+              <div className="shrink-0 text-right">
+                <div className={`text-lg font-bold tabular-nums leading-none ${t.value}`}>
+                  {qty(sheets, 0)}
+                </div>
+                <div className="mt-0.5 text-[10px] font-semibold text-slate-500">แผ่น Reject</div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 const KPI_MODAL_META = {
   rejects: {
     title: "รายละเอียดจำนวน Reject",
@@ -101,6 +201,7 @@ function KpiDetailModal({
             title: "วันที่",
             dataIndex: "date",
             width: 110,
+            render: (value) => formatDate(value),
             sorter: (a, b) => String(a.date || "").localeCompare(String(b.date || "")),
           },
           { title: "บริษัท", dataIndex: "company_name", ellipsis: true },
@@ -232,55 +333,25 @@ function RejectImpactPanel({ kpi }) {
   const valuePct = Number(kpi?.value_reject_pct || 0);
   const sheetPct = shipSheets > 0 ? (claimSheets / shipSheets) * 100 : 0;
 
-  const compareRows = [
-    {
-      key: "sheet",
-      name: "จำนวนแผ่น",
-      reject: claimSheets,
-      ship: shipSheets,
-      pct: sheetPct,
-    },
-    {
-      key: "weight",
-      name: "น้ำหนัก",
-      reject: rejectWeight,
-      ship: shipWeight,
-      pct: weightPct,
-    },
-    {
-      key: "value",
-      name: "มูลค่า",
-      reject: rejectAmount,
-      ship: shipAmount,
-      pct: valuePct,
-    },
-  ];
-
-  const barData = compareRows.map((row) => ({
-    name: row.name,
-    pct: Number(row.pct.toFixed(2)),
-    label: pct(row.pct, 2),
-  }));
-
   return (
     <div className="space-y-5">
       <div className="grid gap-3 lg:grid-cols-3">
         <div className="rounded-xl border border-red-100 bg-gradient-to-br from-red-50 to-white p-4">
-          <div className="text-xs font-semibold text-red-700">จำนวนแผ่นที่ Reject</div>
+          <div className="text-xs font-semibold text-red-700">สัดส่วน Reject ตามจำนวนแผ่น</div>
           <div className="mt-1 text-2xl font-bold tracking-tight text-slate-900">
-            {qty(claimSheets, 0)} <span className="text-sm font-semibold text-slate-500">แผ่น</span>
+            {pct(sheetPct, 2)}
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2 border-t border-red-100 pt-3">
-            <div className="rounded-lg bg-white/80 px-2.5 py-2">
-              <div className="text-[10px] font-medium text-slate-500">ยอดส่งจริง</div>
+            <div className="rounded-lg bg-red-100/70 px-2.5 py-2">
+              <div className="text-[10px] font-medium text-red-700">จำนวนแผ่นที่ Reject</div>
               <div className="mt-0.5 text-sm font-bold tabular-nums text-slate-800">
-                {qty(shipSheets, 0)} <span className="text-[10px] font-medium">แผ่น</span>
+                {qty(claimSheets, 0)} <span className="text-[10px] font-medium">แผ่น</span>
               </div>
             </div>
-            <div className="rounded-lg bg-red-100/70 px-2.5 py-2">
-              <div className="text-[10px] font-medium text-red-700">คิดเป็นสัดส่วน</div>
-              <div className="mt-0.5 text-sm font-bold tabular-nums text-red-700">
-                {pct(sheetPct, 2)}
+            <div className="rounded-lg bg-white/80 px-2.5 py-2">
+              <div className="text-[10px] font-medium text-slate-500">ยอดส่งของใบที่เคลม</div>
+              <div className="mt-0.5 text-sm font-bold tabular-nums text-slate-800">
+                {qty(shipSheets, 0)} <span className="text-[10px] font-medium">แผ่น</span>
               </div>
             </div>
           </div>
@@ -326,54 +397,8 @@ function RejectImpactPanel({ kpi }) {
           </div>
         </div>
       </div>
-
-      <div>
-        <div className="mb-2 text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
-          สัดส่วนเทียบยอดส่งจริง
-        </div>
-        {claimSheets > 0 || shipSheets > 0 ? (
-          <div className="h-[180px]">
-            <ResponsiveContainer>
-              <BarChart
-                data={barData}
-                layout="vertical"
-                margin={{ top: 8, right: 56, left: 4, bottom: 4 }}
-                barCategoryGap="28%"
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-                <XAxis
-                  type="number"
-                  domain={[0, (max) => Math.max(Number(max) * 1.2 || 1, 1)]}
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={(v) => `${v}%`}
-                />
-                <YAxis type="category" dataKey="name" width={72} tick={{ fontSize: 12 }} />
-                <Tooltip
-                  formatter={(value) => [`${Number(value).toFixed(2)}%`, "สัดส่วน Reject"]}
-                  cursor={{ fill: "rgba(185, 28, 28, 0.06)" }}
-                />
-                <Bar dataKey="pct" radius={[0, 8, 8, 0]} maxBarSize={26}>
-                  {barData.map((entry, index) => (
-                    <Cell
-                      key={entry.name}
-                      fill={["#b91c1c", "#d97706", "#ea580c"][index % 3]}
-                    />
-                  ))}
-                  <LabelList
-                    dataKey="label"
-                    position="right"
-                    style={{ fill: "#0f172a", fontSize: 12, fontWeight: 700 }}
-                  />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="ไม่มีข้อมูลในช่วงนี้" />
-        )}
-        <div className="mt-1 text-[11px] leading-4 text-slate-400">
-          น้ำหนัก = แผ่นเล็ก × น้ำหนัก/แผ่น · มูลค่า = แผ่นเล็ก × ราคา/แผ่นเล็ก
-        </div>
+      <div className="text-[12px] font-medium leading-4 text-slate-700">
+        ยอดส่งนับไม่ซ้ำต่อใบสั่งของใบที่เคลม · ไม่ใช่ยอดทั้งโรงงาน · น้ำหนัก/มูลค่า = แผ่น × อัตราต่อแผ่น
       </div>
     </div>
   );
@@ -414,16 +439,19 @@ function RejectPctBarChart({
     const row = payload[0]?.payload;
     if (!row) return null;
     return (
-      <div className="min-w-[200px] rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-lg">
-        <div className="text-sm font-bold text-slate-900">{row.name}</div>
-        <div className="mt-1.5 space-y-1 text-[12px] text-slate-600">
-          <div className="flex justify-between gap-3">
-            <span>% Reject</span>
-            <span className="font-semibold tabular-nums">{pct(row._pct, 2)}</span>
+      <div className="min-w-[260px] rounded-xl border border-slate-300 bg-white px-3.5 py-3 shadow-xl">
+        <div className="text-[15px] font-bold text-slate-900">{row.name}</div>
+        <div className="mt-2 space-y-1.5 text-[13px] text-slate-800">
+          <div className="flex justify-between gap-4">
+            <span className="font-semibold text-slate-700">% Reject</span>
+            <span className="font-bold tabular-nums text-red-700">{pct(row._pct, 2)}</span>
+          </div>
+          <div className="rounded-md bg-slate-50 px-2 py-1.5 text-[11px] leading-4 font-medium text-slate-600">
+            คิดจาก แผ่น Reject ÷ ยอดส่งของใบที่เคลม (นับไม่ซ้ำ) × 100
           </div>
           {tooltipExtra ? tooltipExtra(row) : null}
           {clickable ? (
-            <div className="pt-1 text-[11px] text-slate-400">คลิกเพื่อดูรายละเอียด</div>
+            <div className="pt-1 text-[12px] font-semibold text-slate-600">คลิกเพื่อดูรายละเอียด</div>
           ) : null}
         </div>
       </div>
@@ -571,6 +599,12 @@ function RejectDetailModal({
       dataIndex: "machine_name",
       width: 90,
     },
+    {
+      title: "วันที่",
+      dataIndex: "date",
+      width: 110,
+      render: (value) => formatDate(value),
+    },
   ];
 
   const tablePagination = pagination
@@ -618,25 +652,8 @@ function RejectDetailModal({
 }
 
 function comparisonPeriodLabel(period, grain) {
-  const date = new Date(`${period.from}T00:00:00`);
-  if (grain === "month") {
-    return date.toLocaleDateString("th-TH", { month: "short", year: "2-digit" });
-  }
-  if (grain === "week") {
-    const end = new Date(`${period.to}T00:00:00`);
-    const fromText = date.toLocaleDateString("th-TH", { day: "numeric", month: "short" });
-    const toText = end.toLocaleDateString("th-TH", {
-      day: "numeric",
-      month: "short",
-      year: "2-digit",
-    });
-    return `${fromText}–${toText}`;
-  }
-  return date.toLocaleDateString("th-TH", {
-    day: "numeric",
-    month: "short",
-    year: "2-digit",
-  });
+  if (grain === "day") return formatDate(period.from);
+  return formatDateRange(period.from, period.to);
 }
 
 function TopComparisonModal({
@@ -796,7 +813,7 @@ function TrendHoverCard({ active, payload, label, grain = "day" }) {
         <div>
           <div className="text-[11px] text-slate-400">{periodLabel}</div>
           <div className="text-sm font-bold text-slate-900">
-            {row.label || label || row.date}
+            {row.label || label || formatDate(row.date)}
           </div>
         </div>
         <div className="text-right">
@@ -838,7 +855,9 @@ export function DashboardPage() {
   const [departmentIds, setDepartmentIds] = useState([]);
   const [shifts, setShifts] = useState([]);
   const [jobTypes, setJobTypes] = useState([]);
+  const [trendStack, setTrendStack] = useState("machine");
   const [filterOpen, setFilterOpen] = useState(false);
+  const [filterCompact, setFilterCompact] = useState(false);
   const [loading, setLoading] = useState(true);
   const [trendLoading, setTrendLoading] = useState(false);
   const [error, setError] = useState("");
@@ -869,6 +888,15 @@ export function DashboardPage() {
     shifts.length +
     jobTypes.length +
     (period === "custom" ? 1 : 0);
+
+  useEffect(() => {
+    const onScroll = () => {
+      setFilterCompact(window.scrollY > 180);
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   const queryParams = useMemo(
     () => ({
@@ -909,10 +937,9 @@ export function DashboardPage() {
       setLoading(true);
       setError("");
       try {
-        const summaryKey = cacheKey("reject-summary", queryParams);
-        const cached = cacheGet(summaryKey);
-        const summary =
-          cached || cacheSet(summaryKey, await dashboardApi.getReject(queryParams));
+        const summary = await cacheGetOrSet(cacheKey("reject-summary", queryParams), () =>
+          dashboardApi.getReject(queryParams),
+        );
         if (!alive) return;
 
         const options = filterOptionsRef.current || {};
@@ -949,16 +976,17 @@ export function DashboardPage() {
     (async () => {
       setTrendLoading(true);
       try {
-        const trendKey = cacheKey("reject-trend", queryParams);
-        const cached = cacheGet(trendKey);
-        const trend =
-          cached || cacheSet(trendKey, await dashboardApi.getTrend(queryParams));
+        const trendParams = { ...queryParams, trend_stack: trendStack };
+        const trend = await cacheGetOrSet(cacheKey("reject-trend", trendParams), () =>
+          dashboardApi.getTrend(trendParams),
+        );
         if (!alive) return;
         setData((prev) => ({
           ...(prev || {}),
           trend: trend.trend,
           trendStackKeys: trend.trendStackKeys,
           trendGrain: trend.trendGrain,
+          trendStack: trend.trendStack || trendStack,
           filters: {
             ...(prev?.filters || {}),
             ...(trend.filters || {}),
@@ -973,24 +1001,17 @@ export function DashboardPage() {
     return () => {
       alive = false;
     };
-  }, [queryParams]);
+  }, [queryParams, trendStack]);
 
-  const thaiDate = useMemo(
-    () =>
-      new Date().toLocaleDateString("th-TH", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-      }),
-    [],
-  );
+  const thaiDate = useMemo(() => formatTodayWithWeekday(), []);
 
   const filterOpts = filterOptions || data || {};
 
   const filterSummary = useMemo(() => {
     if (!data?.filters) return null;
-    const parts = [`ช่วง ${data.filters.from} → ${data.filters.to}`];
+    const parts = [
+      `ช่วง ${formatDate(data.filters.from)} → ${formatDate(data.filters.to)}`,
+    ];
 
     if (machineIds.length) {
       const names = (filterOpts.machineOptions || [])
@@ -1022,7 +1043,39 @@ export function DashboardPage() {
   }, [data, filterOpts, machineIds, departmentIds, shifts, jobTypes]);
 
   const problemTotal = useMemo(
-    () => (data?.topProblems || []).reduce((sum, item) => sum + Number(item.count || 0), 0) || 1,
+    () =>
+      (data?.topProblems || []).reduce(
+        (sum, item) => sum + Number(item.claim_sheet_qty || item.count || 0),
+        0,
+      ) || 1,
+    [data],
+  );
+
+  const focusDepartments = useMemo(
+    () =>
+      [...(data?.topDepartments || [])]
+        .filter((item) => Number(item.count || 0) > 0)
+        .sort(
+          (a, b) =>
+            Number(b.claim_sheet_qty || 0) - Number(a.claim_sheet_qty || 0) ||
+            Number(b.reject_amount || 0) - Number(a.reject_amount || 0) ||
+            Number(b.count || 0) - Number(a.count || 0),
+        )
+        .slice(0, 3),
+    [data],
+  );
+
+  const focusProblems = useMemo(
+    () =>
+      [...(data?.allProblems || data?.topProblems || [])]
+        .filter((item) => Number(item.count || 0) > 0)
+        .sort(
+          (a, b) =>
+            Number(b.claim_sheet_qty || 0) - Number(a.claim_sheet_qty || 0) ||
+            Number(b.reject_amount || 0) - Number(a.reject_amount || 0) ||
+            Number(b.count || 0) - Number(a.count || 0),
+        )
+        .slice(0, 3),
     [data],
   );
 
@@ -1033,23 +1086,25 @@ export function DashboardPage() {
   );
   const trendStackColors = useMemo(() => colorsForKeys(trendStackKeys), [trendStackKeys]);
   const trendGrain = data?.trendGrain || data?.filters?.trend_grain || "day";
+  const activeTrendStack = data?.trendStack || trendStack;
+  const stackNoun = activeTrendStack === "department" ? "หน่วยงาน" : "เครื่อง";
   const trendCopy =
     trendGrain === "month"
       ? {
-          section: "4) แนวโน้มรายเดือน",
-          title: "จำนวน Reject ตามเดือน (แยกเครื่อง)",
-          subtitle: "แท่งแบ่งสีตามเครื่อง · รวมเป็นรายเดือนเมื่อเลือกช่วงยาว · วางเมาส์เพื่อดูรายละเอียด",
+          section: "6) แนวโน้มตามเวลา",
+          title: `จำนวน Reject รายเดือน (แยก${stackNoun})`,
+          subtitle: `แท่งแบ่งสีตาม${stackNoun} · รวมเป็นรายเดือนเมื่อเลือกช่วงยาว · วางเมาส์เพื่อดูรายละเอียด`,
         }
       : trendGrain === "week"
         ? {
-            section: "4) แนวโน้มรายสัปดาห์",
-            title: "จำนวน Reject ตามสัปดาห์ (แยกเครื่อง)",
-            subtitle: "แท่งแบ่งสีตามเครื่อง · รวมเป็นรายสัปดาห์ · วางเมาส์เพื่อดูรายละเอียด",
+            section: "6) แนวโน้มตามเวลา",
+            title: `จำนวน Reject รายสัปดาห์ (แยก${stackNoun})`,
+            subtitle: `แท่งแบ่งสีตาม${stackNoun} · รวมเป็นรายสัปดาห์ · วางเมาส์เพื่อดูรายละเอียด`,
           }
         : {
-            section: "4) แนวโน้มรายวัน",
-            title: "จำนวน Reject ตามวัน (แยกเครื่อง)",
-            subtitle: "แท่งแบ่งสีตามเครื่อง · วางเมาส์เพื่อดูจำนวน Reject และปัญหา",
+            section: "6) แนวโน้มตามเวลา",
+            title: `จำนวน Reject รายวัน (แยก${stackNoun})`,
+            subtitle: `แท่งแบ่งสีตาม${stackNoun} · วางเมาส์เพื่อดูจำนวน Reject และปัญหา`,
           };
 
   const machinePanels = useMemo(() => {
@@ -1080,9 +1135,9 @@ export function DashboardPage() {
       setKpiModalError("");
       try {
         const params = { ...queryParams, type, page, pageSize };
-        const key = cacheKey("reject-kpi-detail", params);
-        const result =
-          cacheGet(key) || cacheSet(key, await dashboardApi.getKpiDetail(params));
+        const result = await cacheGetOrSet(cacheKey("reject-kpi-detail", params), () =>
+          dashboardApi.getKpiDetail(params),
+        );
         setKpiModalRows(result.rows || []);
         setKpiModalPaging({
           page: result.page || page,
@@ -1130,7 +1185,7 @@ export function DashboardPage() {
           meta.type === "problem"
             ? dashboardApi.getProblemDetail
             : dashboardApi.getDepartmentDetail;
-        const result = cacheGet(key) || cacheSet(key, await fetcher(params));
+        const result = await cacheGetOrSet(key, () => fetcher(params));
         setDetailModalRows(result.rows || []);
         setDetailModalPaging({
           page: result.page || page,
@@ -1196,7 +1251,7 @@ export function DashboardPage() {
         grain:
           period === "custom"
             ? trendGrain
-            : period === "all"
+            : period === "all" || period === "last_month"
               ? "month"
               : period,
         ...queryParams,
@@ -1250,37 +1305,60 @@ export function DashboardPage() {
         </div>
       </Card>
 
-      <div className="sticky top-16 z-10 -mx-1 rounded-xl border border-slate-200 bg-white/95 p-2.5 shadow-md backdrop-blur">
-        <div className="flex items-center justify-between gap-3">
-          <div className="hidden min-w-0 md:block">
-            <div className="text-xs font-semibold text-slate-700">ตัวกรอง Dashboard</div>
-            {filterSummary ? (
-              <div className="truncate text-[11px] text-slate-500">{filterSummary}</div>
-            ) : null}
-          </div>
-          <div className="min-w-0 flex-1 overflow-x-auto md:flex-none">
-            <div className="flex w-max items-center gap-2 md:ml-auto">
-            <Radio.Group
-              size="small"
-              optionType="button"
-              buttonStyle="solid"
-              value={period === "custom" ? undefined : period}
-              options={PERIODS}
-              onChange={(e) => handleQuickPeriod(e.target.value)}
-            />
-            <Badge count={activeFilterCount} size="small" offset={[-2, 2]}>
-              <Button
-                size="small"
-                icon={<FilterOutlined />}
-                onClick={() => setFilterOpen(true)}
-              >
-                ตัวกรอง
-              </Button>
-            </Badge>
+      {!filterCompact ? (
+        <div className="sticky top-16 z-20 -mx-1 rounded-xl border border-slate-200 bg-white/95 p-2.5 shadow-md backdrop-blur">
+          <div className="flex items-center justify-between gap-3">
+            <div className="hidden min-w-0 md:block">
+              <div className="text-xs font-semibold text-slate-700">ตัวกรอง Dashboard</div>
+              {filterSummary ? (
+                <div className="truncate text-[11px] font-medium text-slate-600">{filterSummary}</div>
+              ) : null}
+            </div>
+            <div className="min-w-0 flex-1 overflow-x-auto md:flex-none">
+              <div className="flex w-max items-center gap-2 md:ml-auto">
+                <Radio.Group
+                  size="small"
+                  optionType="button"
+                  buttonStyle="solid"
+                  value={period === "custom" ? undefined : period}
+                  options={PERIODS}
+                  onChange={(e) => handleQuickPeriod(e.target.value)}
+                />
+                <Badge count={activeFilterCount} size="small" offset={[-2, 2]}>
+                  <Button
+                    size="small"
+                    icon={<FilterOutlined />}
+                    onClick={() => setFilterOpen(true)}
+                  >
+                    ตัวกรอง
+                  </Button>
+                </Badge>
+              </div>
             </div>
           </div>
+          <div className="mt-2 border-t border-slate-100 pt-2">
+            <SectionJumpNav items={SECTION_JUMPS} />
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="pointer-events-none fixed right-4 bottom-5 z-30 flex flex-col items-end gap-2 sm:right-6 sm:bottom-6">
+          <div className="pointer-events-auto">
+            <SectionJumpFab items={SECTION_JUMPS} />
+          </div>
+          <Badge count={activeFilterCount} size="small" offset={[-4, 4]}>
+            <Button
+              type="primary"
+              size="large"
+              icon={<FilterOutlined />}
+              className="pointer-events-auto !h-12 !rounded-full !px-4 !shadow-lg"
+              onClick={() => setFilterOpen(true)}
+              title={filterSummary || "เปิดตัวกรอง"}
+            >
+              ตัวกรอง
+            </Button>
+          </Badge>
+        </div>
+      )}
 
       <DashboardFilterModal
         open={filterOpen}
@@ -1305,9 +1383,10 @@ export function DashboardPage() {
 
       <Spin spinning={loading} className="block w-full">
         <div className="mt-6 space-y-6">
+        <CompanyPulse headline={data?.headline} />
         {/* 1) KPI — overview first */}
         <section>
-        <SectionTitle>1) สรุปตัวเลขสำคัญ</SectionTitle>
+        <SectionTitle id="reject-overview">1) ภาพรวม Reject ช่วงนี้</SectionTitle>
         <div className="grid grid-cols-2 gap-3 xl:grid-cols-4 xl:gap-4">
           <KpiTile
             icon={<FileSearchOutlined />}
@@ -1342,6 +1421,35 @@ export function DashboardPage() {
             onClick={() => openKpiModal("problems")}
           />
         </div>
+
+        {focusDepartments.length || focusProblems.length ? (
+          <div className="mt-4 rounded-xl border border-red-200 bg-white px-4 py-3.5 shadow-sm">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <div className="text-sm font-bold text-red-800">Focus ด่วน</div>
+              <div className="text-[12px] font-medium text-slate-700">
+                ใครต้องแก้ · เสียหายกี่แผ่น · คลิกเปิดรายการ
+              </div>
+            </div>
+            <div className="mt-3 grid gap-4 md:grid-cols-2">
+              {focusDepartments.length ? (
+                <FocusRankList
+                  title="หน่วยงาน"
+                  items={focusDepartments}
+                  tone="red"
+                  onSelect={(item) => openDepartmentModal(item)}
+                />
+              ) : null}
+              {focusProblems.length ? (
+                <FocusRankList
+                  title="ปัญหา"
+                  items={focusProblems}
+                  tone="orange"
+                  onSelect={(item) => openProblemModal(item)}
+                />
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         </section>
 
         <KpiDetailModal
@@ -1350,7 +1458,7 @@ export function DashboardPage() {
           loading={kpiModalLoading}
           error={kpiModalError}
           rows={kpiModalRows}
-          pagination={kpiModalType === "rejects" ? kpiModalPaging : undefined}
+          pagination={kpiModalPaging}
           onPaginationChange={(page, pageSize) => loadKpiModal(kpiModalType, page, pageSize)}
           subtitleExtra={
             kpiModalType === "rejects" && kpiModalPaging.total
@@ -1389,24 +1497,189 @@ export function DashboardPage() {
           onClose={closeTopComparison}
         />
 
-        {/* 2) Reject impact + department damage ranking */}
+        {/* 2) Reject % vs unique PDR/PDW orders */}
         <section>
-          <SectionTitle>2) ผลกระทบจำนวนแผ่นที่ Reject</SectionTitle>
+          <SectionTitle id="reject-rate-target">2) % Reject เทียบใบสั่งและ Target</SectionTitle>
           <Panel
-            title="จำนวนแผ่น · สัดส่วนน้ำหนัก · สัดส่วนมูลค่า"
-            subtitle="เคลมแผ่นเล็กเทียบยอดส่งจริง"
+            title="% Reject ต่อใบสั่ง PDR / PDW"
+            subtitle="ครั้ง ÷ ใบสั่งทั้งโรงงานตามวันตีบิล · ตามตัวกรองหน้า"
+          >
+            <LazyMount minHeight={220}>
+              <OrderRateComparisonTable kind="reject" filters={queryParams} />
+            </LazyMount>
+          </Panel>
+          <div className="mt-4">
+            <Panel
+              className="!h-auto"
+              title="% Reject เทียบ New Target รายหน่วยงาน"
+              subtitle="ครั้ง ÷ ใบสั่งทั้งโรงงาน · เทียบกับ New Target · รายเดือน / รายสัปดาห์"
+            >
+              <LazyMount minHeight={280}>
+                <DeptTargetRateTable kind="reject" />
+              </LazyMount>
+            </Panel>
+          </div>
+        </section>
+
+        {/* 3) Impact */}
+        <section>
+          <SectionTitle id="reject-claim-share">3) สัดส่วนแผ่น Reject บนใบที่เคลม</SectionTitle>
+          <Panel
+            title="แผ่น · น้ำหนัก · มูลค่า"
+            subtitle="% = แผ่น Reject ÷ ยอดส่งของใบที่เคลม · ไม่ใช่ยอดทั้งโรงงาน"
           >
             <RejectImpactPanel kpi={data?.kpi} />
           </Panel>
         </section>
 
-        {/* 3) % Reject by department + problems bar charts — full width each */}
+        {/* 3) Problems + Customers */}
         <section>
-          <SectionTitle>3) % Reject ตามหน่วยงานและปัญหา</SectionTitle>
+          <SectionTitle id="reject-top">4) ปัญหาและลูกค้าที่พบบ่อย</SectionTitle>
+          <Row gutter={[16, 16]} align="stretch">
+            <Col xs={24} xl={11} className="flex">
+              <div className="w-full">
+              <Panel
+                title="Top 5 ปัญหาที่พบ"
+                subtitle="สัดส่วนแผ่น Reject ตามปัญหา · รายชื่อสีด้านล่างคือคำอธิบายกราฟ"
+                action={
+                  <Button
+                    size="small"
+                    icon={<BarChartOutlined />}
+                    onClick={() => openTopComparison("problems")}
+                  >
+                    เปรียบเทียบ
+                  </Button>
+                }
+              >
+                {(data?.topProblems || []).length ? (
+                  <div className="flex h-full flex-col">
+                    <div className="relative mx-auto w-full max-w-[380px] shrink-0" style={{ height: 300 }}>
+                      <ResponsiveContainer>
+                        <PieChart>
+                          <Pie
+                            data={data.topProblems}
+                            dataKey="claim_sheet_qty"
+                            nameKey="name"
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={78}
+                            outerRadius={120}
+                            paddingAngle={3}
+                            stroke="#fff"
+                            strokeWidth={3}
+                            label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
+                            labelLine={{
+                              stroke: "#94a3b8",
+                              strokeWidth: 1,
+                            }}
+                          >
+                            {data.topProblems.map((entry, index) => (
+                              <Cell
+                                key={entry.id || entry.name}
+                                fill={PIE_COLORS[index % PIE_COLORS.length]}
+                                style={{ filter: "drop-shadow(0 2px 4px rgba(15, 23, 42, 0.12))" }}
+                              />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            formatter={(value, _name, props) => [
+                              `${Number(value).toLocaleString("th-TH")} แผ่น`,
+                              props?.payload?.name || "แผ่น Reject",
+                            ]}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                        <div className="text-center">
+                          <div className="text-[11px] tracking-wide text-slate-400 uppercase">
+                            รวม Top 5
+                          </div>
+                          <div className="text-2xl font-bold text-slate-900">
+                            {problemTotal.toLocaleString("th-TH")}
+                          </div>
+                          <div className="text-xs text-slate-500">แผ่น</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 min-h-0 flex-1 overflow-auto">
+                      <DetailList
+                        items={data.topProblems}
+                        colors={PIE_COLORS}
+                        valueKey="claim_sheet_qty"
+                        valueSuffix="แผ่น"
+                        renderMeta={(item) =>
+                          [
+                            `${qty(item.count, 0)} ครั้ง`,
+                            item.reject_amount != null
+                              ? `มูลค่า ${money(item.reject_amount)} บาท`
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")
+                        }
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="ไม่มีข้อมูลในช่วงนี้" />
+                )}
+              </Panel>
+              </div>
+            </Col>
+            <Col xs={24} xl={13} className="flex">
+              <div className="w-full">
+                <Panel
+                  title="Top 5 บริษัทลูกค้า"
+                  subtitle="เรียงจากครั้งที่โดน Reject · เห็นแผ่นและมูลค่าในแถวเดียวกัน"
+                  action={
+                    <Button
+                      size="small"
+                      icon={<BarChartOutlined />}
+                      onClick={() => openTopComparison("companies")}
+                    >
+                      เปรียบเทียบ
+                    </Button>
+                  }
+                >
+                  <HorizontalRankChart
+                    items={data?.topCompanies || []}
+                    height={300}
+                    renderMeta={(item) => {
+                      const amount = item.reject_amount ?? item.claim_amount;
+                      return amount == null ? null : `มูลค่า Reject ${money(amount)} บาท`;
+                    }}
+                  />
+                </Panel>
+              </div>
+            </Col>
+          </Row>
+        </section>
+
+        {/* 4) Departments */}
+        <section>
+          <SectionTitle id="reject-trend-dims">5) แนวโน้มตามหน่วยงาน ปัญหา ลูกค้า เครื่อง</SectionTitle>
           <div className="space-y-4">
             <Panel
+              title="แนวโน้ม Reject ตามช่วงเวลา"
+              subtitle="เทียบช่วงก่อนหน้า · สถานะ: ดีขึ้น / ทรงตัว / ต้องปรับปรุง · มีทั้งครั้งและมูลค่า"
+            >
+              <LazyMount minHeight={320}>
+                <RejectSummaryTable
+                  period={period}
+                  from={customFrom}
+                  to={customTo}
+                  machineIds={machineIds}
+                  departmentIds={departmentIds}
+                  shifts={shifts}
+                  jobTypes={jobTypes}
+                  stickyOffset={64}
+                />
+              </LazyMount>
+            </Panel>
+            <Panel
               title="% Reject ตามหน่วยงาน"
-              subtitle="แกน X = หน่วยงานทั้งหมดจาก Master · เรียง % มาก → น้อย · คลิกแท่งเพื่อดูรายละเอียดลูกค้า"
+              subtitle="% = แผ่น Reject ÷ ยอดส่งของใบที่เคลม (นับไม่ซ้ำ) · เรียงมาก → น้อย · คลิกแท่งเพื่อดูรายละเอียด"
             >
               <RejectPctBarChart
                 items={[...(data?.topDepartments || [])].sort(
@@ -1417,53 +1690,26 @@ export function DashboardPage() {
                 onBarClick={(row) => openDepartmentModal(row)}
                 tooltipExtra={(row) => (
                   <>
-                    <div className="flex justify-between gap-3">
-                      <span>แผ่น Reject</span>
-                      <span className="font-semibold tabular-nums">
+                    <div className="flex justify-between gap-4">
+                      <span className="font-semibold text-slate-700">แผ่น Reject</span>
+                      <span className="font-bold tabular-nums text-slate-900">
                         {qty(row.claim_sheet_qty, 0)} แผ่น
                       </span>
                     </div>
-                    <div className="flex justify-between gap-3">
-                      <span>ยอดส่งจริง</span>
-                      <span className="font-semibold tabular-nums">
+                    <div className="flex justify-between gap-4">
+                      <span className="font-semibold text-slate-700">ยอดส่งจริง</span>
+                      <span className="font-bold tabular-nums text-slate-900">
                         {qty(row.actual_ship_qty, 0)} แผ่น
                       </span>
                     </div>
-                  </>
-                )}
-              />
-            </Panel>
-
-            <Panel
-              title="% Reject ตามปัญหา (Top 10)"
-              subtitle="แกน X = ปัญหา · เรียง % มาก → น้อย · คลิกแท่งเพื่อดูรายละเอียดลูกค้า"
-            >
-              <RejectPctBarChart
-                items={[...(data?.allProblems || [])]
-                  .sort((a, b) => Number(b.reject_pct || 0) - Number(a.reject_pct || 0))
-                  .slice(0, 10)}
-                valueKey="reject_pct"
-                layout="vertical"
-                height={360}
-                emptyText="ไม่มีปัญหาใน Master"
-                onBarClick={(row) => openProblemModal(row)}
-                tooltipExtra={(row) => (
-                  <>
-                    <div className="flex justify-between gap-3">
-                      <span>ครั้ง</span>
-                      <span className="font-semibold tabular-nums">
-                        {Number(row.count || 0).toLocaleString("th-TH")} ครั้ง
+                    <div className="flex justify-between gap-4 border-t border-slate-100 pt-1.5">
+                      <span className="font-semibold text-slate-700">
+                        มูลค่า
+                        <span className="mt-0.5 block text-[11px] font-medium text-slate-500">
+                          แผ่นเคลม × ราคา/แผ่น
+                        </span>
                       </span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span>แผ่น Reject</span>
-                      <span className="font-semibold tabular-nums">
-                        {qty(row.claim_sheet_qty, 0)} แผ่น
-                      </span>
-                    </div>
-                    <div className="flex justify-between gap-3">
-                      <span>มูลค่า</span>
-                      <span className="font-semibold tabular-nums">
+                      <span className="font-bold tabular-nums text-orange-800">
                         {money(row.reject_amount)} บาท
                       </span>
                     </div>
@@ -1474,10 +1720,26 @@ export function DashboardPage() {
           </div>
         </section>
 
-        {/* 4) Trend */}
+        {/* 5) Trend */}
         <section>
-          <SectionTitle>{trendCopy.section}</SectionTitle>
-          <Panel title={trendCopy.title} subtitle={trendCopy.subtitle}>
+          <SectionTitle id="reject-trend-time">{trendCopy.section}</SectionTitle>
+          <Panel
+            title={trendCopy.title}
+            subtitle={trendCopy.subtitle}
+            action={
+              <Radio.Group
+                size="small"
+                optionType="button"
+                buttonStyle="solid"
+                value={trendStack}
+                options={[
+                  { value: "machine", label: "แยกเครื่อง" },
+                  { value: "department", label: "แยกหน่วยงาน" },
+                ]}
+                onChange={(event) => setTrendStack(event.target.value)}
+              />
+            }
+          >
             <Spin spinning={trendLoading}>
               {(data?.trend || []).length ? (
                 <div className="h-[320px]">
@@ -1554,189 +1816,76 @@ export function DashboardPage() {
           </Panel>
         </section>
 
-        {/* 4) Problems + Companies */}
+        {/* 6) Machines */}
         <section>
-          <SectionTitle>5) ปัญหาและลูกค้า</SectionTitle>
-          <Row gutter={[16, 16]} align="stretch">
-            <Col xs={24} xl={11} className="flex">
-              <div className="w-full">
-              <Panel
-                title="Top 5 ปัญหาที่พบ"
-                subtitle="สัดส่วนปัญหาที่เจอบ่อย"
-                action={
-                  <Button
-                    size="small"
-                    icon={<BarChartOutlined />}
-                    onClick={() => openTopComparison("problems")}
-                  >
-                    เปรียบเทียบ
-                  </Button>
-                }
-              >
-                {(data?.topProblems || []).length ? (
-                  <div className="flex h-full flex-col">
-                    <div className="relative mx-auto w-full max-w-[380px] shrink-0" style={{ height: 300 }}>
-                      <ResponsiveContainer>
-                        <PieChart>
-                          <Pie
-                            data={data.topProblems}
-                            dataKey="count"
-                            nameKey="name"
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={78}
-                            outerRadius={120}
-                            paddingAngle={3}
-                            stroke="#fff"
-                            strokeWidth={3}
-                            label={({ percent }) => `${(percent * 100).toFixed(0)}%`}
-                            labelLine={{
-                              stroke: "#94a3b8",
-                              strokeWidth: 1,
-                            }}
-                          >
-                            {data.topProblems.map((entry, index) => (
-                              <Cell
-                                key={entry.id || entry.name}
-                                fill={PIE_COLORS[index % PIE_COLORS.length]}
-                                style={{ filter: "drop-shadow(0 2px 4px rgba(15, 23, 42, 0.12))" }}
-                              />
-                            ))}
-                          </Pie>
-                          <Tooltip
-                            formatter={(value, _name, props) => [
-                              `${Number(value).toLocaleString("th-TH")} ครั้ง`,
-                              props?.payload?.name || "จำนวน",
-                            ]}
-                          />
-                        </PieChart>
-                      </ResponsiveContainer>
-                      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                        <div className="text-center">
-                          <div className="text-[11px] tracking-wide text-slate-400 uppercase">
-                            รวม Top 5
-                          </div>
-                          <div className="text-2xl font-bold text-slate-900">
-                            {problemTotal.toLocaleString("th-TH")}
-                          </div>
-                          <div className="text-xs text-slate-500">ครั้ง</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 min-h-0 flex-1 overflow-auto">
-                      <DetailList items={data.topProblems} colors={PIE_COLORS} />
-                    </div>
-                  </div>
-                ) : (
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="ไม่มีข้อมูลในช่วงนี้" />
-                )}
-              </Panel>
-              </div>
-            </Col>
-            <Col xs={24} xl={13} className="flex">
-              <div className="w-full">
-                <Panel
-                  title="Top 5 บริษัทลูกค้า"
-                  subtitle="ชื่อเต็ม + จำนวนครั้ง + มูลค่า Reject (แผ่นเล็ก × ราคา)"
-                  action={
-                    <Button
-                      size="small"
-                      icon={<BarChartOutlined />}
-                      onClick={() => openTopComparison("companies")}
-                    >
-                      เปรียบเทียบ
-                    </Button>
-                  }
-                >
-                  <HorizontalRankChart
-                    items={data?.topCompanies || []}
-                    height={300}
-                    renderMeta={(item) => {
-                      const amount = item.reject_amount ?? item.claim_amount;
-                      return amount == null ? null : `มูลค่า Reject ${money(amount)} บาท`;
-                    }}
-                  />
-                </Panel>
-              </div>
-            </Col>
-          </Row>
-        </section>
-
-        {/* 6) Machine comparison matrix — sheets / value / weight per machine */}
-        <section>
-          <SectionTitle>6) ตารางเทียบข้อมูลตามเครื่องจักร</SectionTitle>
-          <Panel
-            title="Reject · ทำลาย BL · ส่งคืนลูกค้า แยกตามเครื่อง"
-            subtitle="เลือกรายวัน / รายสัปดาห์ / รายเดือน · แถวล่าสุดคือช่วงปัจจุบัน · ใช้ตัวกรองเดียวกับ Dashboard"
-          >
-            <MachineComparisonPanel
-              period={period}
-              from={customFrom}
-              to={customTo}
-              machineIds={machineIds}
-              departmentIds={departmentIds}
-              shifts={shifts}
-              jobTypes={jobTypes}
-            />
-          </Panel>
-        </section>
-
-        {/* 7) Machines — full width; no agency Top ranking */}
-        <section>
-          <SectionTitle>7) เครื่องจักรที่ติดปัญหา</SectionTitle>
-          <Panel title="เปรียบเทียบจำนวน Reject ตามเครื่อง" subtitle="เรียงจากเครื่องที่มีปัญหาบ่อยสุด">
-            <VerticalRankChart items={data?.machines || []} height={300} />
-          </Panel>
-        </section>
-
-        {/* 8) Per-machine top 3 */}
-        <section>
-          <SectionTitle>8) Top 3 ปัญหาของแต่ละเครื่อง</SectionTitle>
-          <Panel
-            title="เจาะลึกตามเครื่อง"
-            subtitle={
-              machineIds.length === 1
-                ? `กำลังโฟกัสเครื่อง ${
-                    filterOpts.machineOptions?.find((item) => item.id === machineIds[0])?.name ||
-                      machineIds[0]
-                  }`
-                : machineIds.length > 1
-                  ? `กำลังกรอง ${machineIds.length} เครื่อง`
-                  : "สลับแท็บเพื่อดู Top 3 ของเครื่องนั้น"
-            }
-          >
-            {machinePanels.length ? (
-              <Tabs
-                size="small"
-                activeKey={machineTab || String(machinePanels[0]?.id)}
-                onChange={setMachineTab}
-                items={machinePanels.map((machine) => ({
-                  key: String(machine.id),
-                  label: (
-                    <span>
-                      {machine.name}
-                      <span className="ml-1 text-slate-400">
-                        ({Number(machine.count || 0).toLocaleString("th-TH")} ครั้ง)
+          <SectionTitle id="reject-machines">7) เครื่องจักรที่ติดปัญหา</SectionTitle>
+          <div className="space-y-4">
+            <Panel
+              title="Reject ตามเครื่อง (ทำลาย BL · ส่งคืนลูกค้า)"
+              subtitle="รายวัน / รายสัปดาห์ / รายเดือน · แถวล่าสุดคือช่วงปัจจุบัน"
+            >
+              <LazyMount minHeight={320}>
+                <MachineComparisonPanel
+                  period={period}
+                  from={customFrom}
+                  to={customTo}
+                  machineIds={machineIds}
+                  departmentIds={departmentIds}
+                  shifts={shifts}
+                  jobTypes={jobTypes}
+                />
+              </LazyMount>
+            </Panel>
+            <Panel title="จำนวน Reject ตามเครื่อง" subtitle="เรียงจากเครื่องที่มีปัญหาบ่อยสุด · คลิกแท่งเพื่อดูรายละเอียด">
+              <VerticalRankChart items={data?.machines || []} height={300} compact />
+            </Panel>
+            <Panel
+              title="Top 3 ปัญหาของแต่ละเครื่อง"
+              subtitle={
+                machineIds.length === 1
+                  ? `กำลังโฟกัสเครื่อง ${
+                      filterOpts.machineOptions?.find((item) => item.id === machineIds[0])?.name ||
+                        machineIds[0]
+                    }`
+                  : machineIds.length > 1
+                    ? `กำลังกรอง ${machineIds.length} เครื่อง`
+                    : "สลับแท็บเพื่อดู Top 3 ของเครื่องนั้น"
+              }
+            >
+              {machinePanels.length ? (
+                <Tabs
+                  size="small"
+                  activeKey={machineTab || String(machinePanels[0]?.id)}
+                  onChange={setMachineTab}
+                  items={machinePanels.map((machine) => ({
+                    key: String(machine.id),
+                    label: (
+                      <span>
+                        {machine.name}
+                        <span className="ml-1 text-slate-400">
+                          ({Number(machine.count || 0).toLocaleString("th-TH")} ครั้ง)
+                        </span>
                       </span>
-                    </span>
-                  ),
-                  children: (
-                    <div className="pt-2">
-                      <VerticalRankChart
-                        items={machine.topProblems || []}
-                        height={300}
-                        emptyText="ไม่มีปัญหาในเครื่องนี้"
-                      />
-                    </div>
-                  ),
-                }))}
-              />
-            ) : (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="ไม่มีข้อมูลในช่วงนี้" />
-            )}
-          </Panel>
+                    ),
+                    children: (
+                      <div className="pt-2">
+                        <VerticalRankChart
+                          items={machine.topProblems || []}
+                          height={300}
+                          compact
+                          emptyText="ไม่มีปัญหาในเครื่องนี้"
+                        />
+                      </div>
+                    ),
+                  }))}
+                />
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="ไม่มีข้อมูลในช่วงนี้" />
+              )}
+            </Panel>
+          </div>
         </section>
+
         </div>
       </Spin>
     </div>

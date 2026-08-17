@@ -38,25 +38,42 @@ import {
 } from "recharts";
 import { complaintDashboardApi } from "../services/api";
 import { useSession } from "../hooks/useSession";
+import { CompanyPulse } from "../components/dashboard/CompanyPulse";
 import { ComplaintFilterModal } from "../components/dashboard/ComplaintFilterModal";
 import { ComplaintSummaryTable } from "../components/dashboard/ComplaintSummaryTable";
+import { OrderRateComparisonTable } from "../components/dashboard/OrderRateComparisonTable";
+import { DeptTargetRateTable } from "../components/dashboard/DeptTargetRateTable";
 import {
   DetailList,
   HorizontalRankChart,
   KpiTile,
+  LazyMount,
   PIE_COLORS,
   Panel,
+  SectionJumpFab,
+  SectionJumpNav,
   SectionTitle,
   VerticalRankChart,
 } from "../components/dashboard/primitives";
 import { colorForKey, colorsForKeys } from "../utils/colors";
-import { cacheGet, cacheGetOrSet, cacheKey, cacheSet } from "../utils/dashboardCache";
+import { cacheGetOrSet, cacheKey } from "../utils/dashboardCache";
+import { formatDate, formatTodayWithWeekday } from "../utils/datetime";
 import { pct, qty } from "../utils/format";
+
+const SECTION_JUMPS = [
+  { id: "complaint-overview", label: "1. ภาพรวม" },
+  { id: "complaint-rate-target", label: "2. % ใบสั่ง · Target" },
+  { id: "complaint-impact", label: "3. ของเสีย · ปิดเคส" },
+  { id: "complaint-top", label: "4. ปัญหา · ลูกค้า" },
+  { id: "complaint-trend-dims", label: "5. แนวโน้มมิติ" },
+  { id: "complaint-trend-time", label: "6. แนวโน้มเวลา" },
+];
 
 const PERIODS = [
   { value: "day", label: "วันนี้" },
   { value: "week", label: "สัปดาห์นี้" },
   { value: "month", label: "เดือนนี้" },
+  { value: "last_month", label: "เดือนที่แล้ว" },
   { value: "all", label: "ทั้งหมด" },
 ];
 
@@ -95,7 +112,7 @@ const KPI_MODAL_META = {
     subtitle: "ชนิดปัญหาทั้งหมดในช่วงที่เลือก",
   },
   departments: {
-    title: "หน่วยงานที่เกิดปัญหา",
+    title: "หน่วยงานที่รับผิดชอบ",
     subtitle: "หน่วยงานที่รับผิดชอบข้อร้องเรียน",
   },
 };
@@ -106,6 +123,7 @@ function complaintRecordColumns() {
       title: "วันที่รับเรื่อง",
       dataIndex: "date",
       width: 120,
+      render: (value) => formatDate(value),
       sorter: (a, b) => String(a.date || "").localeCompare(String(b.date || "")),
       defaultSortOrder: "descend",
     },
@@ -124,7 +142,7 @@ function complaintRecordColumns() {
       sorter: (a, b) => a.demand_qty - b.demand_qty,
     },
     {
-      title: "NG",
+      title: "ของเสีย",
       dataIndex: "ng_qty",
       align: "right",
       width: 90,
@@ -174,7 +192,7 @@ function rankedColumns(type) {
       sorter: (a, b) => a.demand_qty - b.demand_qty,
     },
     {
-      title: "NG รวม",
+      title: "ของเสียรวม",
       dataIndex: "ng_qty",
       align: "right",
       width: 110,
@@ -199,14 +217,14 @@ function DetailModal({
 }) {
   const tablePagination = pagination
     ? {
-        current: pagination.page,
-        pageSize: pagination.pageSize,
-        total: pagination.total,
-        showSizeChanger: true,
-        pageSizeOptions: [10, 20, 50],
-        showTotal: (total) => `${total.toLocaleString("th-TH")} รายการ`,
-        onChange: (page, pageSize) => onPaginationChange?.(page, pageSize),
-      }
+      current: pagination.page,
+      pageSize: pagination.pageSize,
+      total: pagination.total,
+      showSizeChanger: true,
+      pageSizeOptions: [10, 20, 50],
+      showTotal: (total) => `${total.toLocaleString("th-TH")} รายการ`,
+      onChange: (page, pageSize) => onPaginationChange?.(page, pageSize),
+    }
     : { pageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50] };
 
   return (
@@ -259,23 +277,26 @@ function ImpactPanel({ kpi, statuses, grades }) {
     <div className="space-y-5">
       <div className="grid gap-3 lg:grid-cols-3">
         <div className="rounded-xl border border-red-100 bg-gradient-to-br from-red-50 to-white p-4">
-          <div className="text-xs font-semibold text-red-700">จำนวนของเสียที่ถูกร้องเรียน (NG)</div>
+          <div className="text-xs font-semibold text-red-700">สัดส่วนของเสียต่อยอดสั่งบนใบ Complaint</div>
           <div className="mt-1 text-2xl font-bold tracking-tight text-slate-900">
-            {qty(ngQty, 0)} <span className="text-sm font-semibold text-slate-500">แผ่น</span>
+            {pct(ngPct, 2)}
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2 border-t border-red-100 pt-3">
+            <div className="rounded-lg bg-red-100/70 px-2.5 py-2">
+              <div className="text-[10px] font-semibold text-red-700">จำนวนของเสีย</div>
+              <div className="mt-0.5 text-sm font-bold tabular-nums text-slate-800">
+                {qty(ngQty, 0)} <span className="text-[10px] font-medium">แผ่น</span>
+              </div>
+            </div>
             <div className="rounded-lg bg-white/80 px-2.5 py-2">
-              <div className="text-[10px] font-medium text-slate-500">ยอดสั่งผลิตรวม</div>
+              <div className="text-[10px] font-semibold text-slate-700">ยอดสั่งบนใบ Complaint</div>
               <div className="mt-0.5 text-sm font-bold tabular-nums text-slate-800">
                 {qty(demandQty, 0)} <span className="text-[10px] font-medium">แผ่น</span>
               </div>
             </div>
-            <div className="rounded-lg bg-red-100/70 px-2.5 py-2">
-              <div className="text-[10px] font-medium text-red-700">คิดเป็นสัดส่วน</div>
-              <div className="mt-0.5 text-sm font-bold tabular-nums text-red-700">
-                {pct(ngPct, 2)}
-              </div>
-            </div>
+          </div>
+          <div className="mt-2 text-[12px] font-medium leading-4 text-slate-700">
+            {kpi?.ng_pct_note || "ของเสีย ÷ ยอดสั่งของใบ Complaint (นับใบสั่งไม่ซ้ำ · ไม่ใช่ยอดทั้งโรงงาน)"}
           </div>
         </div>
 
@@ -306,39 +327,45 @@ function ImpactPanel({ kpi, statuses, grades }) {
             {leadTime == null ? "—" : qty(leadTime, 1)}{" "}
             <span className="text-sm font-semibold text-slate-500">วัน</span>
           </div>
-          <div className="mt-3 border-t border-amber-100 pt-3">
-            <div className="mb-1.5 text-[10px] font-medium text-amber-800">
-              สัดส่วนตามเกรดลูกค้า
-            </div>
-            <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
-              {(grades || []).map((item) => (
-                <div
-                  key={item.name}
-                  style={{
-                    width: `${(item.count / gradeTotal) * 100}%`,
-                    background: GRADE_COLORS[item.name] || "#94a3b8",
-                  }}
-                  title={`เกรด ${item.name} · ${item.count} ครั้ง`}
-                />
-              ))}
-            </div>
-            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
-              {(grades || []).map((item) => (
-                <span
-                  key={item.name}
-                  className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-600"
-                >
-                  <span
-                    className="h-2 w-2 rounded-full"
-                    style={{ background: GRADE_COLORS[item.name] || "#94a3b8" }}
-                  />
-                  {item.name} ({item.count})
-                </span>
-              ))}
-            </div>
+          <div className="mt-2 text-[12px] font-medium leading-4 text-slate-700">
+            วันตอบกลับ − วันส่งต่อเอกสาร · เฉพาะเคสที่รับเอกสาร
           </div>
         </div>
       </div>
+
+      {grades?.length ? (
+        <div>
+          <div className="mb-1.5 text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
+            สัดส่วนตามเกรดลูกค้า
+          </div>
+          <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+            {grades.map((item) => (
+              <div
+                key={item.name}
+                style={{
+                  width: `${(item.count / gradeTotal) * 100}%`,
+                  background: GRADE_COLORS[item.name] || "#94a3b8",
+                }}
+                title={`เกรด ${item.name} · ${item.count} ครั้ง`}
+              />
+            ))}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+            {grades.map((item) => (
+              <span
+                key={item.name}
+                className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-600"
+              >
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ background: GRADE_COLORS[item.name] || "#94a3b8" }}
+                />
+                {item.name} ({item.count})
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div>
         <div className="mb-2 text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
@@ -422,7 +449,7 @@ function TrendHoverCard({ active, payload, grain }) {
         )}
         {row.ng_qty ? (
           <div className="mt-2 border-t border-slate-100 pt-2 text-[11px] text-slate-500">
-            ของเสีย NG รวม {qty(row.ng_qty, 0)} แผ่น
+            ของเสียรวม {qty(row.ng_qty, 0)} แผ่น
           </div>
         ) : null}
       </div>
@@ -430,9 +457,73 @@ function TrendHoverCard({ active, payload, grain }) {
   );
 }
 
+function FocusRankList({ title, items, tone = "red", onSelect }) {
+  const tones = {
+    red: {
+      badgeTop: "bg-red-700 text-white",
+      badgeRest: "bg-slate-200 text-slate-700",
+      rowTop: "border-red-300 bg-red-50",
+      rowRest: "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white",
+      value: "text-red-700",
+    },
+    orange: {
+      badgeTop: "bg-orange-600 text-white",
+      badgeRest: "bg-slate-200 text-slate-700",
+      rowTop: "border-orange-300 bg-orange-50",
+      rowRest: "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white",
+      value: "text-orange-700",
+    },
+  };
+  const t = tones[tone] || tones.red;
+
+  return (
+    <div>
+      <div className="mb-2 text-[12px] font-semibold text-slate-700">{title}</div>
+      <div className="space-y-2">
+        {items.map((item, index) => {
+          const isTop = index === 0;
+          return (
+            <button
+              key={item.id || item.name}
+              type="button"
+              onClick={() => onSelect?.(item)}
+              className={`flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition ${isTop ? t.rowTop : t.rowRest
+                }`}
+            >
+              <span
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${isTop ? t.badgeTop : t.badgeRest
+                  }`}
+              >
+                {index + 1}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div
+                  className={`truncate font-semibold text-slate-900 ${isTop ? "text-[15px]" : "text-[13px]"
+                    }`}
+                >
+                  {item.name}
+                </div>
+                <div className="text-[11px] tabular-nums text-slate-500">
+                  จาก {qty(item.count, 0)} ครั้งที่ร้องเรียน
+                </div>
+              </div>
+              <div className="shrink-0 text-right">
+                <div className={`text-lg font-bold tabular-nums leading-none ${t.value}`}>
+                  {qty(item.ng_qty, 0)}
+                </div>
+                <div className="mt-0.5 text-[10px] font-semibold text-slate-500">แผ่นของเสีย</div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function ComplaintDashboardPage() {
   const { user } = useSession();
-  const [period, setPeriod] = useState("all");
+  const [period, setPeriod] = useState("month");
   const [customFrom, setCustomFrom] = useState(undefined);
   const [customTo, setCustomTo] = useState(undefined);
   const [departmentIds, setDepartmentIds] = useState([]);
@@ -444,6 +535,7 @@ export function ComplaintDashboardPage() {
   const [shifts, setShifts] = useState([]);
   const [statuses, setStatuses] = useState([]);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [filterCompact, setFilterCompact] = useState(false);
   const [trendGrain, setTrendGrain] = useState("month");
   const [trendStack, setTrendStack] = useState("department");
   const [departmentTab, setDepartmentTab] = useState(null);
@@ -478,6 +570,15 @@ export function ComplaintDashboardPage() {
     shifts.length +
     statuses.length +
     (period === "custom" ? 1 : 0);
+
+  useEffect(() => {
+    const onScroll = () => {
+      setFilterCompact(window.scrollY > 180);
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   const queryParams = useMemo(
     () => ({
@@ -534,11 +635,9 @@ export function ComplaintDashboardPage() {
       setLoading(true);
       setError("");
       try {
-        const summaryKey = cacheKey("complaint-summary", queryParams);
-        const cached = cacheGet(summaryKey);
-        const summary =
-          cached ||
-          cacheSet(summaryKey, await complaintDashboardApi.getSummary(queryParams));
+        const summary = await cacheGetOrSet(cacheKey("complaint-summary", queryParams), () =>
+          complaintDashboardApi.getSummary(queryParams),
+        );
         if (!alive) return;
 
         const options = filterOptionsRef.current || {};
@@ -579,10 +678,9 @@ export function ComplaintDashboardPage() {
       setTrendLoading(true);
       try {
         const trendParams = { ...queryParams, trend_grain: trendGrain };
-        const trendKey = cacheKey("complaint-trend", trendParams);
-        const cached = cacheGet(trendKey);
-        const trend =
-          cached || cacheSet(trendKey, await complaintDashboardApi.getTrend(trendParams));
+        const trend = await cacheGetOrSet(cacheKey("complaint-trend", trendParams), () =>
+          complaintDashboardApi.getTrend(trendParams),
+        );
         if (!alive) return;
         setData((prev) => ({
           ...(prev || {}),
@@ -605,20 +703,13 @@ export function ComplaintDashboardPage() {
     };
   }, [queryParams, trendGrain]);
 
-  const thaiDate = useMemo(
-    () =>
-      new Date().toLocaleDateString("th-TH", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-      }),
-    [],
-  );
+  const thaiDate = useMemo(() => formatTodayWithWeekday(), []);
 
   const filterSummary = useMemo(() => {
     if (!data?.filters) return null;
-    const parts = [`ช่วง ${data.filters.from} → ${data.filters.to}`];
+    const parts = [
+      `ตัวกรอง · ช่วง ${formatDate(data.filters.from)} → ${formatDate(data.filters.to)}`,
+    ];
     const options = filterOptions || data;
     const describe = (label, ids, opts, key = "id") => {
       if (!ids.length) return;
@@ -628,6 +719,7 @@ export function ComplaintDashboardPage() {
       parts.push(names.length ? `${label} ${names.join(", ")}` : `${label} ${ids.length} รายการ`);
     };
 
+    if (!machineIds.length) parts.push("ทุกเครื่อง");
     describe("หน่วยงาน", departmentIds, options.departmentOptions);
     describe("ปัญหา", problemIds, options.problemOptions);
     describe("ลูกค้า", companyIds, options.companyOptions);
@@ -650,6 +742,34 @@ export function ComplaintDashboardPage() {
     shifts,
     statuses,
   ]);
+
+  const focusDepartments = useMemo(
+    () =>
+      data?.focusDepartments?.length
+        ? data.focusDepartments
+        : [...(data?.departments || [])]
+          .sort(
+            (a, b) =>
+              Number(b.ng_qty || 0) - Number(a.ng_qty || 0) ||
+              Number(b.count || 0) - Number(a.count || 0),
+          )
+          .slice(0, 3),
+    [data],
+  );
+
+  const focusProblems = useMemo(
+    () =>
+      data?.focusProblems?.length
+        ? data.focusProblems
+        : [...(data?.topProblems || [])]
+          .sort(
+            (a, b) =>
+              Number(b.ng_qty || 0) - Number(a.ng_qty || 0) ||
+              Number(b.count || 0) - Number(a.count || 0),
+          )
+          .slice(0, 3),
+    [data],
+  );
 
   const problemTotal = useMemo(
     () => (data?.topProblems || []).reduce((sum, item) => sum + Number(item.count || 0), 0) || 1,
@@ -687,9 +807,9 @@ export function ComplaintDashboardPage() {
       setKpiModalError("");
       try {
         const params = { ...queryParams, type, page, pageSize };
-        const key = cacheKey("complaint-kpi-detail", params);
-        const result =
-          cacheGet(key) || cacheSet(key, await complaintDashboardApi.getKpiDetail(params));
+        const result = await cacheGetOrSet(cacheKey("complaint-kpi-detail", params), () =>
+          complaintDashboardApi.getKpiDetail(params),
+        );
         setKpiModalRows(result.rows || []);
         setKpiModalPaging({
           page: result.page || page,
@@ -726,9 +846,9 @@ export function ComplaintDashboardPage() {
           page,
           pageSize,
         };
-        const key = cacheKey("complaint-entity-detail", params);
-        const result =
-          cacheGet(key) || cacheSet(key, await complaintDashboardApi.getEntityDetail(params));
+        const result = await cacheGetOrSet(cacheKey("complaint-entity-detail", params), () =>
+          complaintDashboardApi.getEntityDetail(params),
+        );
         setEntityModalRows(result.rows || []);
         setEntityModalPaging({
           page: result.page || page,
@@ -785,33 +905,56 @@ export function ComplaintDashboardPage() {
         </div>
       </Card>
 
-      <div className="sticky top-16 z-10 -mx-1 rounded-xl border border-slate-200 bg-white/95 p-2.5 shadow-md backdrop-blur">
-        <div className="flex items-center justify-between gap-3">
-          <div className="hidden min-w-0 md:block">
-            <div className="text-xs font-semibold text-slate-700">ตัวกรอง Dashboard</div>
-            {filterSummary ? (
-              <div className="truncate text-[11px] text-slate-500">{filterSummary}</div>
-            ) : null}
-          </div>
-          <div className="min-w-0 flex-1 overflow-x-auto md:flex-none">
-            <div className="flex w-max items-center gap-2 md:ml-auto">
-              <Radio.Group
-                size="small"
-                optionType="button"
-                buttonStyle="solid"
-                value={period === "custom" ? undefined : period}
-                options={PERIODS}
-                onChange={(event) => handleQuickPeriod(event.target.value)}
-              />
-              <Badge count={activeFilterCount} size="small" offset={[-2, 2]}>
-                <Button size="small" icon={<FilterOutlined />} onClick={() => setFilterOpen(true)}>
-                  ตัวกรอง
-                </Button>
-              </Badge>
+      {!filterCompact ? (
+        <div className="sticky top-16 z-20 -mx-1 rounded-xl border border-slate-200 bg-white/95 p-2.5 shadow-md backdrop-blur">
+          <div className="flex items-center justify-between gap-3">
+            <div className="hidden min-w-0 md:block">
+              <div className="text-xs font-semibold text-slate-700">ตัวกรอง Dashboard</div>
+              {filterSummary ? (
+                <div className="truncate text-[11px] font-medium text-slate-600">{filterSummary}</div>
+              ) : null}
+            </div>
+            <div className="min-w-0 flex-1 overflow-x-auto md:flex-none">
+              <div className="flex w-max items-center gap-2 md:ml-auto">
+                <Radio.Group
+                  size="small"
+                  optionType="button"
+                  buttonStyle="solid"
+                  value={period === "custom" ? undefined : period}
+                  options={PERIODS}
+                  onChange={(event) => handleQuickPeriod(event.target.value)}
+                />
+                <Badge count={activeFilterCount} size="small" offset={[-2, 2]}>
+                  <Button size="small" icon={<FilterOutlined />} onClick={() => setFilterOpen(true)}>
+                    ตัวกรอง
+                  </Button>
+                </Badge>
+              </div>
             </div>
           </div>
+          <div className="mt-2 border-t border-slate-100 pt-2">
+            <SectionJumpNav items={SECTION_JUMPS} />
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="pointer-events-none fixed right-4 bottom-5 z-30 flex flex-col items-end gap-2 sm:right-6 sm:bottom-6">
+          <div className="pointer-events-auto">
+            <SectionJumpFab items={SECTION_JUMPS} />
+          </div>
+          <Badge count={activeFilterCount} size="small" offset={[-4, 4]}>
+            <Button
+              type="primary"
+              size="large"
+              icon={<FilterOutlined />}
+              className="pointer-events-auto !h-12 !rounded-full !px-4 !shadow-lg"
+              onClick={() => setFilterOpen(true)}
+              title={filterSummary || "เปิดตัวกรอง"}
+            >
+              ตัวกรอง
+            </Button>
+          </Badge>
+        </div>
+      )}
 
       <ComplaintFilterModal
         open={filterOpen}
@@ -844,8 +987,9 @@ export function ComplaintDashboardPage() {
 
       <Spin spinning={loading} className="block w-full">
         <div className="mt-6 space-y-6">
+          <CompanyPulse headline={data?.headline} />
           <section>
-            <SectionTitle>1) สรุปตัวเลขสำคัญ</SectionTitle>
+            <SectionTitle id="complaint-overview">1) ภาพรวม Complaint ช่วงนี้</SectionTitle>
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-4 xl:gap-4">
               <KpiTile
                 icon={<FileSearchOutlined />}
@@ -873,13 +1017,46 @@ export function ComplaintDashboardPage() {
               />
               <KpiTile
                 icon={<ApartmentOutlined />}
-                label="หน่วยงานที่เกิดปัญหา"
+                label="หน่วยงานที่รับผิดชอบ"
                 value={`${(data?.kpi?.department_count || 0).toLocaleString("th-TH")} หน่วยงาน`}
-                hint="คลิกดูรายการ · หน่วยงานที่รับผิดชอบ"
+                hint="คลิกดูรายการ · หน่วยงานที่รับผิดชอบข้อร้องเรียน"
                 tone="rose"
                 onClick={() => openKpiModal("departments")}
               />
             </div>
+
+            {focusDepartments.length || focusProblems.length ? (
+              <div className="mt-4 rounded-xl border border-red-200 bg-white px-4 py-3.5 shadow-sm">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <div className="text-sm font-bold text-red-800">Focus ด่วน</div>
+                  <div className="text-[12px] font-medium text-slate-700">
+                    ใครต้องแก้ · เสียหายกี่แผ่น · คลิกเปิดรายการ
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-4 md:grid-cols-2">
+                  {focusDepartments.length ? (
+                    <FocusRankList
+                      title="หน่วยงาน"
+                      items={focusDepartments}
+                      tone="red"
+                      onSelect={(item) =>
+                        openEntityModal("department", item, { titlePrefix: "หน่วยงาน" })
+                      }
+                    />
+                  ) : null}
+                  {focusProblems.length ? (
+                    <FocusRankList
+                      title="ปัญหา"
+                      items={focusProblems}
+                      tone="orange"
+                      onSelect={(item) =>
+                        openEntityModal("problem", item, { titlePrefix: "ปัญหา" })
+                      }
+                    />
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
           </section>
 
           <DetailModal
@@ -899,7 +1076,7 @@ export function ComplaintDashboardPage() {
                 : rankedColumns(kpiModalType)
             }
             width={kpiModalType === "complaints" ? 1200 : 860}
-            pagination={kpiModalType === "complaints" ? kpiModalPaging : undefined}
+            pagination={kpiModalPaging}
             onPaginationChange={(page, pageSize) => loadKpiModal(kpiModalType, page, pageSize)}
             onClose={() => {
               setKpiModalType(null);
@@ -934,23 +1111,46 @@ export function ComplaintDashboardPage() {
           />
 
           <section>
-            <SectionTitle>2) ผลกระทบและสถานะการดำเนินการ</SectionTitle>
+            <SectionTitle id="complaint-rate-target">2) % Complaint เทียบใบสั่งและ Target</SectionTitle>
             <Panel
-              title="ของเสีย NG · การปิดเคส · เกรดลูกค้า"
-              subtitle="เทียบปริมาณ NG กับยอดสั่งผลิต และดูว่าเคสค้างอยู่ที่ขั้นตอนไหน"
+              title="% Complaint ต่อใบสั่ง PDR / PDW"
+              subtitle="ครั้ง ÷ ใบสั่งทั้งโรงงานตามวันตีบิล · ตามตัวกรองหน้า"
+            >
+              <LazyMount minHeight={220}>
+                <OrderRateComparisonTable kind="complaint" filters={queryParams} />
+              </LazyMount>
+            </Panel>
+            <div className="mt-4">
+              <Panel
+                className="!h-auto"
+                title="% Complaint เทียบ New Target รายหน่วยงาน"
+                subtitle="ครั้ง ÷ ใบสั่งทั้งโรงงาน · เทียบกับ New Target · รายเดือน / รายสัปดาห์"
+              >
+                <LazyMount minHeight={280}>
+                  <DeptTargetRateTable kind="complaint" />
+                </LazyMount>
+              </Panel>
+            </div>
+          </section>
+
+          <section>
+            <SectionTitle id="complaint-impact">3) สัดส่วนของเสียและสถานะปิดเคส</SectionTitle>
+            <Panel
+              title="ของเสีย · การปิดเคส · เกรดลูกค้า"
+              subtitle="% = แผ่นของเสีย ÷ ยอดสั่งบนใบ Complaint · ปิดเคสได้แค่ไหน · ตอบกลับเฉลี่ยกี่วัน"
             >
               <ImpactPanel kpi={data?.kpi} statuses={data?.statuses} grades={data?.grades} />
             </Panel>
           </section>
 
           <section>
-            <SectionTitle>3) ปัญหาและลูกค้าที่ร้องเรียน</SectionTitle>
+            <SectionTitle id="complaint-top">4) ปัญหาและลูกค้าที่ร้องเรียน</SectionTitle>
             <Row gutter={[16, 16]} align="stretch">
               <Col xs={24} xl={11} className="flex">
                 <div className="w-full">
                   <Panel
                     title="Top 5 ปัญหาที่ถูกร้องเรียน"
-                    subtitle="สัดส่วนปัญหาที่ลูกค้าแจ้งเข้ามาบ่อยที่สุด · คลิกเพื่อดูรายการ"
+                    subtitle="สัดส่วนปัญหาในช่วงนี้ · รายชื่อสีด้านล่างคือคำอธิบายกราฟ · คลิกเพื่อดูรายการ"
                   >
                     {(data?.topProblems || []).length ? (
                       <div className="flex h-full flex-col">
@@ -991,10 +1191,14 @@ export function ComplaintDashboardPage() {
                                 ))}
                               </Pie>
                               <Tooltip
-                                formatter={(value, _name, props) => [
-                                  `${Number(value).toLocaleString("th-TH")} ครั้ง`,
-                                  props?.payload?.name || "จำนวน",
-                                ]}
+                                formatter={(value, _name, props) => {
+                                  const ng = Number(props?.payload?.ng_qty || 0);
+                                  return [
+                                    `${Number(value).toLocaleString("th-TH")} ครั้ง${ng ? ` · ของเสีย ${ng.toLocaleString("th-TH")} แผ่น` : ""
+                                    }`,
+                                    props?.payload?.name || "จำนวน",
+                                  ];
+                                }}
                               />
                             </PieChart>
                           </ResponsiveContainer>
@@ -1015,7 +1219,7 @@ export function ComplaintDashboardPage() {
                           <DetailList
                             items={data.topProblems}
                             colors={PIE_COLORS}
-                            renderMeta={(item) => item.name_en}
+                            renderMeta={(item) => item.name_en || null}
                             onSelect={(item) =>
                               openEntityModal("problem", item, { titlePrefix: "ปัญหา" })
                             }
@@ -1032,12 +1236,12 @@ export function ComplaintDashboardPage() {
                 <div className="w-full">
                   <Panel
                     title="Top 5 ลูกค้าที่ร้องเรียน"
-                    subtitle="ชื่อลูกค้า + จำนวนครั้งที่ร้องเรียน · คลิกเพื่อดูรายการ"
+                    subtitle="เรียงจากครั้งที่ร้องเรียน · เห็นแผ่นของเสียในแถวเดียวกัน · คลิกเปิดรายการ"
                   >
                     <HorizontalRankChart
                       items={data?.topCompanies || []}
                       height={300}
-                      renderMeta={(item) => item.name_en}
+                      renderMeta={(item) => item.name_en || null}
                       onSelect={(item) =>
                         openEntityModal("company", item, { titlePrefix: "ลูกค้า" })
                       }
@@ -1049,8 +1253,28 @@ export function ComplaintDashboardPage() {
           </section>
 
           <section>
-            <SectionTitle>4) หน่วยงานที่เกิดปัญหา</SectionTitle>
+            <SectionTitle id="complaint-trend-dims">5) แนวโน้มตามหน่วยงาน ปัญหา ลูกค้า เครื่อง</SectionTitle>
             <div className="space-y-4">
+              <Panel
+                title="แนวโน้ม Complaint ตามช่วงเวลา"
+                subtitle="เทียบช่วงก่อนหน้า · สถานะ: ดีขึ้น / ทรงตัว / ต้องปรับปรุง · มีทั้งครั้งและแผ่นของเสีย"
+              >
+                <ComplaintSummaryTable
+                  period={period}
+                  from={customFrom}
+                  to={customTo}
+                  departmentIds={departmentIds}
+                  problemIds={problemIds}
+                  companyIds={companyIds}
+                  machineIds={machineIds}
+                  fluteIds={fluteIds}
+                  grades={grades}
+                  shifts={shifts}
+                  statuses={statuses}
+                  stickyOffset={64}
+                />
+              </Panel>
+
               <Panel
                 title="Top 5 หน่วยงานที่รับผิดชอบข้อร้องเรียน"
                 subtitle="เรียงจากหน่วยงานที่ถูกร้องเรียนบ่อยที่สุด · คลิกเพื่อดูรายการ"
@@ -1058,6 +1282,7 @@ export function ComplaintDashboardPage() {
                 <VerticalRankChart
                   items={data?.topDepartments || []}
                   height={300}
+                  compact
                   onSelect={(item) =>
                     openEntityModal("department", item, { titlePrefix: "หน่วยงาน" })
                   }
@@ -1079,7 +1304,11 @@ export function ComplaintDashboardPage() {
                         <span>
                           {department.name}
                           <span className="ml-1 text-slate-400">
-                            ({Number(department.count || 0).toLocaleString("th-TH")} ครั้ง)
+                            ({Number(department.count || 0).toLocaleString("th-TH")} ครั้ง
+                            {department.ng_qty
+                              ? ` · ของเสีย ${Number(department.ng_qty).toLocaleString("th-TH")} แผ่น`
+                              : ""}
+                            )
                           </span>
                         </span>
                       ),
@@ -1088,6 +1317,7 @@ export function ComplaintDashboardPage() {
                           <VerticalRankChart
                             items={department.topProblems || []}
                             height={300}
+                            compact
                             emptyText="ไม่มีปัญหาในหน่วยงานนี้"
                             onSelect={(item) =>
                               openEntityModal("department", department, {
@@ -1108,9 +1338,9 @@ export function ComplaintDashboardPage() {
           </section>
 
           <section>
-            <SectionTitle>5) แนวโน้มการร้องเรียน</SectionTitle>
+            <SectionTitle id="complaint-trend-time">6) แนวโน้มตามเวลา</SectionTitle>
             <Panel
-              title={`จำนวนครั้งที่ถูกร้องเรียนราย${trendNoun}`}
+              title={`จำนวน Complaint ราย${trendNoun}`}
               subtitle="แท่งแบ่งสีตามมิติที่เลือก · วางเมาส์เพื่อดูปัญหาในช่วงนั้น"
               action={
                 <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1203,28 +1433,6 @@ export function ComplaintDashboardPage() {
                   <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="ไม่มีข้อมูลในช่วงนี้" />
                 )}
               </Spin>
-            </Panel>
-          </section>
-
-          <section>
-            <SectionTitle>6) ตารางสรุปปัญหาที่ลูกค้าร้องเรียน</SectionTitle>
-            <Panel
-              title="เปรียบเทียบรายเดือน / รายสัปดาห์"
-              subtitle="เลือกมิติที่ต้องการเทียบ · แถวขยายได้เพื่อดูปัญหาย่อย · ใช้ตัวกรองเดียวกับ Dashboard"
-            >
-              <ComplaintSummaryTable
-                period={period}
-                from={customFrom}
-                to={customTo}
-                departmentIds={departmentIds}
-                problemIds={problemIds}
-                companyIds={companyIds}
-                machineIds={machineIds}
-                fluteIds={fluteIds}
-                grades={grades}
-                shifts={shifts}
-                statuses={statuses}
-              />
             </Panel>
           </section>
         </div>

@@ -5,7 +5,8 @@ import { useSearchParams } from "react-router-dom";
 import { ComplaintForm } from "../components/forms/ComplaintForm";
 import { PageHeader } from "../components/ui/PageHeader";
 import { COMPLAINT_WORKFLOW_LABELS } from "../constants/complaintWorkflow";
-import { complaintApi } from "../services/api";
+import { complaintApi, erpApi } from "../services/api";
+import { buildErpDraftRecord } from "../utils/mapErpPdr";
 import { formatDate } from "../utils/datetime";
 
 const RESULT_COLUMNS = [
@@ -41,10 +42,39 @@ export function ComplaintFormPage() {
     setRecords([]);
     setSelectedRecord(null);
     try {
-      const result = await complaintApi.searchByPdr(pdrNo);
-      const rows = result.data || [];
+      // มีใน CMS แล้ว → GET อย่างเดียว
+      const existing = await complaintApi.searchByPdr(pdrNo);
+      let rows = existing.data || [];
+
+      if (!rows.length) {
+        // ไม่มีใน CMS → GET ERP มาโชว์อย่างเดียว (ยังไม่ INSERT)
+        const erpResult = await erpApi.getPdr(pdrNo);
+        if (!erpResult?.enabled) {
+          message.error(
+            erpResult?.error ||
+              "ยังไม่ได้เปิด ERP (ตั้ง ERP_API_ENABLED=1 และรัน Beta_api_erp)",
+          );
+          return;
+        }
+        if (!erpResult.ok) {
+          message.error(erpResult.error || "เรียก ERP ไม่สำเร็จ");
+          return;
+        }
+        const erpRow = erpResult.data?.[0];
+        if (!erpRow) {
+          message.warning("ไม่พบเลข PDR นี้ใน ERP");
+          return;
+        } 
+        const draft = buildErpDraftRecord(erpRow, "complaint");
+        rows = [draft];
+        message.info("ดึงจาก ERP แล้ว — ยังไม่บันทึกลง CMS จนกว่า CS จะส่งข้อมูล");
+      }
+
       setRecords(rows);
-      if (!rows.length) return;
+      if (!rows.length) {
+        message.warning("ไม่พบข้อมูลสำหรับเลข PDR นี้");
+        return;
+      }
       const preferred = preferredId
         ? rows.find((row) => Number(row.id) === Number(preferredId))
         : null;
@@ -68,9 +98,21 @@ export function ComplaintFormPage() {
 
   const updateRecord = (updated) => {
     setSelectedRecord(updated);
-    setRecords((previous) =>
-      previous.map((record) => (record.id === updated.id ? updated : record)),
-    );
+    setRecords((previous) => {
+      if (!previous.length) return updated ? [updated] : [];
+      const matched = previous.some(
+        (row) =>
+          (row.id == null && updated?.id != null) ||
+          (row.id != null && Number(row.id) === Number(updated.id)),
+      );
+      if (!matched) return updated ? [...previous, updated] : previous;
+      return previous.map((row) =>
+        (row.id == null && updated?.id != null) ||
+        (row.id != null && Number(row.id) === Number(updated.id))
+          ? updated
+          : row,
+      );
+    });
   };
 
   return (
@@ -91,7 +133,7 @@ export function ComplaintFormPage() {
                 ค้นหา Complaint ด้วยเลข PDR
               </Typography.Title>
               <Typography.Text type="secondary">
-                ข้อมูลนำเข้าจากทะเบียนข้อร้องเรียน Sheet 2026
+                มีใน CMS จะเปิดใบเดิม — ไม่มีจะดึง ERP มาโชว์ (บันทึกเมื่อ CS ส่งข้อมูล)
               </Typography.Text>
             </div>
           </div>
@@ -125,7 +167,7 @@ export function ComplaintFormPage() {
               message={`พบ ${records.length} รายการ กรุณาเลือกรายการที่ต้องการ`}
             />
             <Table
-              rowKey="id"
+              rowKey={(row) => row.id ?? `draft-${row.pdr_no}`}
               size="small"
               scroll={{ x: 760 }}
               dataSource={records}
@@ -133,7 +175,9 @@ export function ComplaintFormPage() {
               pagination={false}
               rowSelection={{
                 type: "radio",
-                selectedRowKeys: selectedRecord ? [selectedRecord.id] : [],
+                selectedRowKeys: selectedRecord
+                  ? [selectedRecord.id ?? `draft-${selectedRecord.pdr_no}`]
+                  : [],
                 onSelect: setSelectedRecord,
               }}
               onRow={(record) => ({

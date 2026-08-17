@@ -1,6 +1,9 @@
 import { Tabs } from "antd";
+import { Navigate } from "react-router-dom";
 import { PageHeader } from "../components/ui/PageHeader";
 import { MasterPanel } from "../components/masters/MasterPanel";
+import { useSession } from "../hooks/useSession";
+import { canAccessMasters } from "../utils/authz";
 
 const TABS = [
   { key: "companies", label: "บริษัท", hasCompany: false },
@@ -12,6 +15,11 @@ const TABS = [
 ];
 
 export function MastersPage() {
+  const { user } = useSession();
+  if (!canAccessMasters(user)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
   return (
     <div>
       <PageHeader
@@ -20,6 +28,7 @@ export function MastersPage() {
       />
       <div className="rounded-2xl bg-white p-4 shadow-sm">
         <Tabs
+          destroyOnHidden
           items={TABS.map((tab) => ({
             key: tab.key,
             label: tab.label,

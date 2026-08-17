@@ -1,15 +1,144 @@
-import { useState } from "react";
-import { Alert, Button, Card, Form, Input, Typography } from "antd";
-import { LockOutlined, UserOutlined } from "@ant-design/icons";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import {
+  Alert,
+  Button,
+  Card,
+  Form,
+  Input,
+  Modal,
+  Typography,
+  message,
+} from "antd";
+import {
+  IdcardOutlined,
+  LockOutlined,
+  MailOutlined,
+} from "@ant-design/icons";
+import { authApi } from "../services/api";
 import { useSession } from "../hooks/useSession";
+import { RegisterForm } from "../components/auth/RegisterForm";
+import {
+  PasswordStrengthInput,
+  securePasswordRules,
+} from "../components/auth/PasswordStrengthInput";
 
 export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useSession();
+  const [forgotForm] = Form.useForm();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkToken = searchParams.get("token");
+  const resetToken = location.pathname === "/reset-password" ? linkToken : null;
+  const [mode, setMode] = useState(resetToken ? "reset" : "login");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [companies, setCompanies] = useState([]);
+
+  useEffect(() => {
+    if (mode !== "register") return;
+    authApi
+      .companies()
+      .then((data) => {
+        setCompanies(Array.isArray(data) ? data : data.items || []);
+      })
+      .catch((err) => setError(err.message));
+  }, [mode]);
+
+  const changeMode = (nextMode) => {
+    setMode(nextMode);
+    setError("");
+    setSuccess("");
+  };
+
+  const onLogin = async (values) => {
+    setLoading(true);
+    setError("");
+    try {
+      await login({
+        employeeCode: values.employeeCode,
+        password: values.password,
+      });
+      navigate(location.state?.from || "/dashboard", { replace: true });
+      message.success("เข้าสู่ระบบสำเร็จ");
+    } catch (err) {
+      setError(err.message || "เข้าสู่ระบบไม่สำเร็จ");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const register = async (values) => {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await authApi.register(values);
+      setSuccess(data.message || "สมัครสมาชิกแล้ว กรุณารอผู้ดูแลอนุมัติ");
+      setMode("login");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const forgotPassword = async ({ email }) => {
+    setLoading(true);
+    setError("");
+    setSuccess("");
+    try {
+      const data = await authApi.forgotPassword(email);
+      setSuccess(data.message || "หากพบอีเมล ระบบจะส่งลิงก์รีเซ็ตรหัสผ่านให้");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const confirmForgotPassword = ({ email }) => {
+    Modal.confirm({
+      centered: true,
+      title: "ยืนยันการส่งลิงก์รีเซ็ตรหัสผ่าน",
+      content: (
+        <div className="mt-4 space-y-3">
+          <div>
+            หากบัญชีผูก Telegram แล้ว ระบบจะส่งปุ่ม Reset Password ในแชท Bot
+            (กรอกรหัสผ่านในแชท 2 ครั้ง) — ไม่งั้นจะส่งทางอีเมล:
+          </div>
+          <Alert type="info" showIcon message={email} />
+        </div>
+      ),
+      okText: "ส่งลิงก์",
+      cancelText: "ยกเลิก",
+      onOk: () => forgotPassword({ email }),
+    });
+  };
+
+  const resetPassword = async ({ password }) => {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await authApi.resetPassword(resetToken, password);
+      setSuccess(data.message || "ตั้งรหัสผ่านใหม่แล้ว กรุณาเข้าสู่ระบบ");
+      setSearchParams({});
+      setMode("login");
+      navigate("/login", { replace: true });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const title = {
+    login: "เข้าสู่ระบบ",
+    register: "สมัครสมาชิก",
+    forgot: "ลืมรหัสผ่าน",
+    reset: "ตั้งรหัสผ่านใหม่",
+  }[mode];
 
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
@@ -89,48 +218,128 @@ export function LoginPage() {
               Complaint & Reject Management System
             </Typography.Text>
             <Typography.Title level={2} className="!mt-1 !mb-1">
-              เข้าสู่ระบบ
+              {title}
             </Typography.Title>
             <Typography.Paragraph type="secondary" className="!mb-0">
-              ใช้ชื่อผู้ใช้และรหัสผ่านของคุณเพื่อเข้าใช้งาน
+              {mode === "register"
+                ? "เลือกบริษัทและส่งคำขอเข้าร่วม ผู้ดูแลระบบจะเป็นผู้อนุมัติ"
+                : "ใช้รหัสพนักงานและรหัสผ่านของคุณเพื่อเข้าใช้งาน"}
             </Typography.Paragraph>
           </div>
 
           {error ? <Alert className="mb-4" type="error" message={error} showIcon /> : null}
+          {success ? <Alert className="mb-4" type="success" message={success} showIcon /> : null}
 
-          <Form
-            layout="vertical"
-            onFinish={async (values) => {
-              setLoading(true);
-              setError("");
-              try {
-                await login(values);
-                navigate(location.state?.from || "/dashboard", { replace: true });
-              } catch (err) {
-                setError(err.message || "เข้าสู่ระบบไม่สำเร็จ");
-              } finally {
-                setLoading(false);
-              }
-            }}
-          >
-            <Form.Item
-              name="username"
-              label="ชื่อผู้ใช้"
-              rules={[{ required: true, message: "กรุณากรอกชื่อผู้ใช้" }]}
+          {mode === "login" ? (
+            <Form
+              name="cms-login"
+              layout="vertical"
+              onFinish={onLogin}
+              autoComplete="on"
             >
-              <Input prefix={<UserOutlined />} size="large" autoComplete="username" autoFocus />
-            </Form.Item>
-            <Form.Item
-              name="password"
-              label="รหัสผ่าน"
-              rules={[{ required: true, message: "กรุณากรอกรหัสผ่าน" }]}
-            >
-              <Input.Password prefix={<LockOutlined />} size="large" autoComplete="current-password" />
-            </Form.Item>
-            <Button type="primary" htmlType="submit" size="large" block loading={loading}>
-              เข้าสู่ระบบ
-            </Button>
-          </Form>
+              <Form.Item
+                name="employeeCode"
+                label="รหัสพนักงาน"
+                rules={[{ required: true, message: "กรุณากรอกรหัสพนักงาน" }]}
+              >
+                <Input
+                  id="login-employee-code"
+                  name="employeeCode"
+                  prefix={<IdcardOutlined />}
+                  size="large"
+                  maxLength={50}
+                  placeholder="รหัสพนักงาน"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoFocus
+                />
+              </Form.Item>
+              <Form.Item
+                name="password"
+                label="รหัสผ่าน"
+                rules={[{ required: true, message: "กรุณากรอกรหัสผ่าน" }]}
+              >
+                <Input.Password
+                  id="login-password"
+                  name="password"
+                  prefix={<LockOutlined />}
+                  size="large"
+                  autoComplete="current-password"
+                />
+              </Form.Item>
+              <Button type="primary" htmlType="submit" size="large" block loading={loading}>
+                เข้าสู่ระบบ
+              </Button>
+              <div className="mt-4 flex justify-between">
+                <Button type="link" className="!px-0" onClick={() => changeMode("register")}>
+                  สมัครสมาชิก
+                </Button>
+                <Button type="link" className="!px-0" onClick={() => changeMode("forgot")}>
+                  ลืมรหัสผ่าน?
+                </Button>
+              </div>
+            </Form>
+          ) : null}
+
+          {mode === "register" ? (
+            <RegisterForm
+              companies={companies}
+              loading={loading}
+              onFinish={register}
+              onBackToLogin={() => changeMode("login")}
+            />
+          ) : null}
+
+          {mode === "forgot" ? (
+            <Form form={forgotForm} layout="vertical" onFinish={confirmForgotPassword}>
+              <Form.Item
+                name="email"
+                label="อีเมลที่ใช้สมัคร"
+                rules={[
+                  { required: true, message: "กรุณากรอกอีเมล" },
+                  { type: "email", message: "รูปแบบอีเมลไม่ถูกต้อง" },
+                ]}
+              >
+                <Input prefix={<MailOutlined />} size="large" autoComplete="email" />
+              </Form.Item>
+              <Button type="primary" htmlType="submit" size="large" block loading={loading}>
+                ส่งลิงก์รีเซ็ตรหัสผ่าน
+              </Button>
+              <Button type="link" block onClick={() => changeMode("login")}>
+                กลับไปเข้าสู่ระบบ
+              </Button>
+            </Form>
+          ) : null}
+
+          {mode === "reset" ? (
+            <Form layout="vertical" onFinish={resetPassword}>
+              <Form.Item name="password" label="รหัสผ่านใหม่" rules={securePasswordRules}>
+                <PasswordStrengthInput />
+              </Form.Item>
+              <Form.Item
+                name="confirmPassword"
+                label="ยืนยันรหัสผ่านใหม่"
+                dependencies={["password"]}
+                rules={[
+                  { required: true, message: "กรุณายืนยันรหัสผ่าน" },
+                  ({ getFieldValue }) => ({
+                    validator(_, value) {
+                      return !value || getFieldValue("password") === value
+                        ? Promise.resolve()
+                        : Promise.reject(new Error("รหัสผ่านไม่ตรงกัน"));
+                    },
+                  }),
+                ]}
+              >
+                <Input.Password prefix={<LockOutlined />} size="large" />
+              </Form.Item>
+              <Button type="primary" htmlType="submit" size="large" block loading={loading}>
+                บันทึกรหัสผ่านใหม่
+              </Button>
+            </Form>
+          ) : null}
         </Card>
       </section>
     </div>

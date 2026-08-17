@@ -11,9 +11,13 @@ import {
   Table,
 } from "antd";
 import { masterApi } from "../../services/api";
+import { useSession } from "../../hooks/useSession";
+import { canManageMasters } from "../../utils/authz";
 
 export function MasterPanel({ masterKey, hasCompany }) {
   const { message } = App.useApp();
+  const { user } = useSession();
+  const canEdit = canManageMasters(user);
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -35,6 +39,7 @@ export function MasterPanel({ masterKey, hasCompany }) {
         q: next.q ?? q,
         page: next.page ?? page,
         pageSize: next.pageSize ?? pageSize,
+        activeOnly: "1",
       });
       setRows(result.data || []);
       setTotal(result.pagination?.total || 0);
@@ -125,19 +130,21 @@ export function MasterPanel({ masterKey, hasCompany }) {
     if (hasCompany) {
       cols.unshift({ title: "บริษัท", dataIndex: "company_name" });
     }
-    cols.push({
-      title: "",
-      key: "actions",
-      width: 100,
-      render: (_, row) => (
-        <Button size="small" onClick={() => openEdit(row)}>
-          แก้ไข
-        </Button>
-      ),
-    });
+    if (canEdit) {
+      cols.push({
+        title: "",
+        key: "actions",
+        width: 100,
+        render: (_, row) => (
+          <Button size="small" onClick={() => openEdit(row)}>
+            แก้ไข
+          </Button>
+        ),
+      });
+    }
     return cols;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasCompany, hasNameEn, isCompanies]);
+  }, [hasCompany, hasNameEn, isCompanies, canEdit]);
 
   return (
     <div>
@@ -154,9 +161,11 @@ export function MasterPanel({ masterKey, hasCompany }) {
           }}
           style={{ width: 280 }}
         />
-        <Button type="primary" onClick={openCreate}>
-          เพิ่ม
-        </Button>
+        {canEdit ? (
+          <Button type="primary" onClick={openCreate}>
+            เพิ่ม
+          </Button>
+        ) : null}
       </Space>
 
       <Table

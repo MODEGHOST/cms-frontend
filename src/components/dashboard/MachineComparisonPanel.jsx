@@ -7,7 +7,9 @@ import {
   MinusOutlined,
 } from "@ant-design/icons";
 import { dashboardApi } from "../../services/api";
+import { cacheGetOrSet, cacheKey } from "../../utils/dashboardCache";
 import { colorForKey } from "../../utils/colors";
+import { formatDate, formatDateRange } from "../../utils/datetime";
 import { qty } from "../../utils/format";
 
 const GRAIN_OPTIONS = [
@@ -66,18 +68,8 @@ const EMPTY_CELL = {
 };
 
 function formatBucketLabel(row, grain) {
-  const from = new Date(`${row.from}T00:00:00`);
-  if (Number.isNaN(from.getTime())) return row.label;
-  if (grain === "month") {
-    return from.toLocaleDateString("th-TH", { month: "short", year: "2-digit" });
-  }
-  if (grain === "week") {
-    const to = new Date(`${row.to}T00:00:00`);
-    const fromText = from.toLocaleDateString("th-TH", { day: "numeric", month: "short" });
-    const toText = to.toLocaleDateString("th-TH", { day: "numeric", month: "short" });
-    return `${fromText}–${toText}`;
-  }
-  return from.toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "2-digit" });
+  if (grain === "day") return formatDate(row.from);
+  return formatDateRange(row.from, row.to);
 }
 
 function sumCells(cells) {
@@ -300,7 +292,7 @@ export function MachineComparisonPanel({
       setLoading(true);
       setError("");
       try {
-        const result = await dashboardApi.getMachineComparison({
+        const params = {
           grain,
           periods: bucketCount,
           period,
@@ -310,7 +302,10 @@ export function MachineComparisonPanel({
           department_ids: departmentIds.length ? departmentIds.join(",") : undefined,
           shifts: shifts.length ? shifts.join(",") : undefined,
           job_types: jobTypes.length ? jobTypes.join(",") : undefined,
-        });
+        };
+        const result = await cacheGetOrSet(cacheKey("reject-machine-comparison", params), () =>
+          dashboardApi.getMachineComparison(params),
+        );
         if (alive) {
           setData(result);
           const nextKeys = (result.machines || []).map((item) => item.key);

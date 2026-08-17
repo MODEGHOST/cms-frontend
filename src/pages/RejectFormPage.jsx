@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FileSearchOutlined } from "@ant-design/icons";
 import { Alert, App, Empty, Input, Spin, Table, Typography } from "antd";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { RejectForm } from "../components/forms/RejectForm";
 import { PageHeader } from "../components/ui/PageHeader";
-import { rejectApi } from "../services/api";
+import { erpApi, rejectApi } from "../services/api";
+import { buildErpDraftRecord } from "../utils/mapErpPdr";
 import { formatDate } from "../utils/datetime";
 
 const RESULT_COLUMNS = [
@@ -20,12 +22,15 @@ const RESULT_COLUMNS = [
 
 export function RejectFormPage() {
   const { message } = App.useApp();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [records, setRecords] = useState([]);
   const [selectedRecord, setSelectedRecord] = useState(null);
+  const [searchValue, setSearchValue] = useState("");
 
-  const searchByPdr = async (rawValue) => {
+  const searchByPdr = async (rawValue, preferredId) => {
     const pdrNo = String(rawValue || "").trim();
     if (!pdrNo) {
       message.warning("กรุณากรอกเลข PDR");
@@ -34,19 +39,91 @@ export function RejectFormPage() {
 
     setLoading(true);
     setSearched(true);
+    setSearchValue(pdrNo);
     setRecords([]);
     setSelectedRecord(null);
 
     try {
-      const result = await rejectApi.searchByPdr(pdrNo);
-      const rows = result.data || [];
+      // มีใน CMS แล้ว → GET อย่างเดียว
+      const existing = await rejectApi.searchByPdr(pdrNo);
+      let rows = existing.data || [];
+
+      if (!rows.length) {
+        // ไม่มีใน CMS → GET ERP มาโชว์อย่างเดียว (ยังไม่ INSERT)
+        const erpResult = await erpApi.getPdr(pdrNo);
+        if (!erpResult?.enabled) {
+          message.error(
+            erpResult?.error ||
+              "ยังไม่ได้เปิด ERP (ตั้ง ERP_API_ENABLED=1 และรัน Beta_api_erp)",
+          );
+          return;
+        }
+        if (!erpResult.ok) {
+          message.error(erpResult.error || "เรียก ERP ไม่สำเร็จ");
+          return;
+        }
+        const erpRow = erpResult.data?.[0];
+        if (!erpRow) {
+          message.warning("ไม่พบเลข PDR นี้ใน ERP");
+          return;
+        }
+        const draft = buildErpDraftRecord(erpRow, "reject");
+        rows = [draft];
+        message.info("ดึงจาก ERP แล้ว — ยังไม่บันทึกลง CMS จนกว่า QC จะกดบันทึก");
+      }
+
       setRecords(rows);
-      if (rows.length === 1) setSelectedRecord(rows[0]);
+      if (!rows.length) {
+        message.warning("ไม่พบข้อมูลสำหรับเลข PDR นี้");
+        return;
+      }
+      const preferred = preferredId
+        ? rows.find((row) => Number(row.id) === Number(preferredId))
+        : null;
+      if (preferred) setSelectedRecord(preferred);
+      else if (rows.length === 1) setSelectedRecord(rows[0]);
     } catch (error) {
       message.error(error.message || "ไม่สามารถค้นหาข้อมูลได้");
     } finally {
       setLoading(false);
     }
+  };
+
+  useEffect(() => {
+    const pdr = String(searchParams.get("pdr") || "").trim();
+    const id = searchParams.get("id");
+    if (!pdr) return;
+    searchByPdr(pdr, id);
+    // deep-link once per querystring
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  const updateRecord = (updated) => {
+    setSelectedRecord(updated);
+    setRecords((previous) => {
+      if (!previous.length) return updated ? [updated] : [];
+      const matched = previous.some(
+        (row) =>
+          (row.id == null && updated?.id != null) ||
+          (row.id != null && Number(row.id) === Number(updated.id)),
+      );
+      if (!matched) return updated ? [...previous, updated] : previous;
+      return previous.map((row) =>
+        (row.id == null && updated?.id != null) ||
+        (row.id != null && Number(row.id) === Number(updated.id))
+          ? updated
+          : row,
+      );
+    });
+  };
+
+  const handleReturned = (returned) => {
+    const returnedId = Number(returned?.id);
+    setSelectedRecord(null);
+    setRecords((previous) =>
+      previous.filter((row) => Number(row.id) !== returnedId),
+    );
+    navigate("/rejects");
   };
 
   return (
@@ -67,7 +144,7 @@ export function RejectFormPage() {
                 ค้นหาข้อมูลด้วยเลข PDR
               </Typography.Title>
               <Typography.Text type="secondary" className="text-sm">
-                กรอกเลข PDR แล้วกดค้นหาเพื่อแสดงข้อมูล Reject
+                มีใน CMS จะเปิดใบเดิม — ไม่มีจะดึง ERP มาโชว์ (บันทึกเมื่อ QC กดบันทึก)
               </Typography.Text>
             </div>
           </div>
@@ -78,6 +155,8 @@ export function RejectFormPage() {
               allowClear
               enterButton="ค้นหา"
               placeholder="เช่น PDR2607-01267"
+              value={searchValue}
+              onChange={(event) => setSearchValue(event.target.value)}
               onSearch={searchByPdr}
               loading={loading}
               aria-label="เลข PDR"
@@ -102,7 +181,7 @@ export function RejectFormPage() {
               message={`พบ ${records.length} รายการสำหรับ PDR นี้ กรุณาเลือกรายการที่ต้องการดู`}
             />
             <Table
-              rowKey="id"
+              rowKey={(row) => row.id ?? `draft-${row.pdr_no}`}
               size="small"
               scroll={{ x: 720 }}
               dataSource={records}
@@ -110,7 +189,9 @@ export function RejectFormPage() {
               pagination={false}
               rowSelection={{
                 type: "radio",
-                selectedRowKeys: selectedRecord ? [selectedRecord.id] : [],
+                selectedRowKeys: selectedRecord
+                  ? [selectedRecord.id ?? `draft-${selectedRecord.pdr_no}`]
+                  : [],
                 onSelect: (record) => setSelectedRecord(record),
               }}
               onRow={(record) => ({
@@ -124,12 +205,8 @@ export function RejectFormPage() {
         {selectedRecord ? (
           <RejectForm
             record={selectedRecord}
-            onSaved={(updated) => {
-              setSelectedRecord(updated);
-              setRecords((prev) =>
-                prev.map((row) => (row.id === updated.id ? updated : row)),
-              );
-            }}
+            onSaved={updateRecord}
+            onReturned={handleReturned}
           />
         ) : null}
       </Spin>

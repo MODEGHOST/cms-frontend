@@ -1,5 +1,8 @@
 @import url("https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap");
-@import "tailwindcss";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 :root {
   font-family: "Noto Sans Thai", "Segoe UI", system-ui, sans-serif;
@@ -12,11 +15,29 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  font-family: "Noto Sans Thai", "Segoe UI", system-ui, sans-serif;
+}
+
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
   background: #f3f5f9;
+}
+
+/*
+ * Tailwind 4 used to reset these. After the v3 downgrade, native
+ * <button> cards (KPI / Focus) otherwise keep browser chrome + system font.
+ */
+button,
+[type="button"],
+[type="reset"],
+[type="submit"] {
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
 }
 
 #root {
@@ -77,4 +98,114 @@ body {
 .complaint-required-select .ant-select-selector {
   border-color: #fca5a5 !important;
   background: rgb(254 242 242 / 0.4) !important;
+}
+
+.complaint-cs-modal-form .ant-form-item {
+  margin-bottom: 12px;
+}
+
+.complaint-cs-modal-form .ant-form-item-extra {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.complaint-cs-modal-form .cs-toggle-group {
+  display: flex !important;
+  width: 100%;
+}
+
+.complaint-cs-modal-form .cs-toggle-group .ant-radio-button-wrapper {
+  flex: 1;
+  text-align: center;
+  font-weight: 500;
+}
+
+/* Multi-select ปัญหา: ช่องสูงตามแท็ก แสดงครบ ไม่ตัดข้อความ */
+.problem-multi-select.ant-select-multiple .ant-select-selector {
+  height: auto !important;
+  min-height: 32px;
+  padding-block: 4px !important;
+  align-items: flex-start !important;
+  overflow: hidden;
+}
+
+.problem-multi-select.ant-select-multiple .ant-select-selection-wrap {
+  align-self: stretch;
+  height: auto !important;
+}
+
+.problem-multi-select.ant-select-multiple .ant-select-selection-overflow {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 4px;
+  overflow: visible !important;
+}
+
+.problem-multi-select.ant-select-multiple .ant-select-selection-overflow-item {
+  max-width: 100%;
+  align-self: flex-start;
+}
+
+.problem-multi-select.ant-select-multiple .ant-select-selection-item {
+  height: auto !important;
+  margin-inline-end: 0 !important;
+  margin-block: 0 !important;
+  max-width: 100%;
+  line-height: 1.35;
+  white-space: normal;
+  padding-block: 2px;
+}
+
+.problem-multi-select.ant-select-multiple .ant-select-selection-item-content {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: unset !important;
+  word-break: break-word;
+}
+
+.problem-multi-select.ant-select-multiple .ant-select-selection-search {
+  margin-inline-start: 0;
+  max-width: 100%;
+}
+
+.problem-mismatch-alert.ant-alert {
+  align-items: flex-start;
+}
+
+/* Folder-style department filter tabs on Members panel */
+.members-department-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 0;
+}
+
+.members-department-tab {
+  appearance: none;
+  border: 1px solid #e2e8f0;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.2;
+  padding: 8px 14px;
+  cursor: pointer;
+  margin-bottom: -1px;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.members-department-tab:hover {
+  color: var(--brand-red);
+  background: #fff;
+}
+
+.members-department-tab.is-active {
+  background: #fff;
+  color: var(--brand-red);
+  border-color: var(--brand-red);
+  font-weight: 600;
+  z-index: 1;
 }

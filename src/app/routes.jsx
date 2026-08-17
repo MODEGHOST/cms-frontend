@@ -11,11 +11,11 @@ import { ComplaintFormPage } from "../pages/ComplaintFormPage";
 import { ActivityLogsPage } from "../pages/ActivityLogsPage";
 import { MastersPage } from "../pages/MastersPage";
 import { SystemPage } from "../pages/SystemPage";
+import { ProfilePage } from "../pages/ProfilePage";
 import { useSession } from "../hooks/useSession";
 
 function PublicOnly({ children }) {
-  const { isAuthenticated, loading } = useSession();
-  if (loading) return null;
+  const { isAuthenticated } = useSession();
   if (isAuthenticated) return <Navigate to="/dashboard" replace />;
   return children;
 }
@@ -31,6 +31,7 @@ export function AppRoutes() {
           </PublicOnly>
         }
       />
+      <Route path="/reset-password" element={<LoginPage />} />
       <Route element={<RequireAuth />}>
         <Route element={<AppLayout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -43,6 +44,7 @@ export function AppRoutes() {
           <Route path="/activity-logs" element={<ActivityLogsPage />} />
           <Route path="/masters" element={<MastersPage />} />
           <Route path="/system" element={<SystemPage />} />
+          <Route path="/profile" element={<ProfilePage />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

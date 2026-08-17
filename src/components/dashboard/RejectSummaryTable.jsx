@@ -7,10 +7,10 @@ import {
   MinusOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
-import { complaintDashboardApi } from "../../services/api";
+import { dashboardApi } from "../../services/api";
 import { cacheGetOrSet, cacheKey } from "../../utils/dashboardCache";
 import { formatDate } from "../../utils/datetime";
-import { qty } from "../../utils/format";
+import { money, qty } from "../../utils/format";
 
 const DIMENSIONS = [
   { value: "department", label: "หน่วยงาน" },
@@ -30,8 +30,8 @@ const DEFAULT_PERIODS = { day: 14, week: 4, month: 3 };
 
 const DIMENSION_HEADER = {
   department: "หน่วยงานที่รับผิดชอบ",
-  problem: "ปัญหาที่ร้องเรียน",
-  company: "ลูกค้าที่ร้องเรียน",
+  problem: "ปัญหาที่ Reject",
+  company: "ลูกค้า",
   machine: "เครื่องจักร",
 };
 
@@ -75,9 +75,9 @@ function StatusPill({ status, delta }) {
 
 function CountCell({ value, highlight }) {
   const count = Number(value?.count || 0);
-  const ngQty = Number(value?.ng_qty || 0);
+  const amount = Number(value?.reject_amount || 0);
   if (!count) {
-    return <span className="text-[13px] text-slate-300">—</span>;
+    return <span className="text-[13px] text-slate-400">—</span>;
   }
   return (
     <div className="leading-snug">
@@ -90,33 +90,26 @@ function CountCell({ value, highlight }) {
       <div className="text-[12px] font-semibold tabular-nums text-slate-600">
         {value.share_pct}%
       </div>
-      {ngQty > 0 ? (
-        <div className="text-[12px] font-bold tabular-nums text-red-700">
-          {qty(ngQty, 0)} <span className="text-[10px] font-semibold">แผ่นของเสีย</span>
+      {amount > 0 ? (
+        <div className="text-[12px] font-bold tabular-nums text-orange-700">
+          {money(amount)}{" "}
+          <span className="text-[10px] font-semibold">บาท</span>
         </div>
       ) : null}
     </div>
   );
 }
 
-/**
- * The executive comparison matrix: one row per entity, one column per month /
- * week / day bucket, with a verdict on the latest bucket. Department, company
- * and machine rows expand into the problems behind them.
- */
-export function ComplaintSummaryTable({
+/** ตารางเปรียบเทียบ Reject: หน่วยงาน/ปัญหา/ลูกค้า/เครื่อง + สถานะดีขึ้น–ต้องปรับปรุง */
+export function RejectSummaryTable({
   period,
   from,
   to,
   departmentIds = [],
-  problemIds = [],
-  companyIds = [],
   machineIds = [],
-  fluteIds = [],
-  grades = [],
   shifts = [],
-  statuses = [],
-  stickyOffset = 64,
+  jobTypes = [],
+  stickyOffset = 136,
 }) {
   const [dimension, setDimension] = useState("department");
   const [grain, setGrain] = useState("month");
@@ -139,16 +132,12 @@ export function ComplaintSummaryTable({
           from: period === "custom" ? from : undefined,
           to: period === "custom" ? to : undefined,
           department_ids: departmentIds.length ? departmentIds.join(",") : undefined,
-          problem_ids: problemIds.length ? problemIds.join(",") : undefined,
-          company_ids: companyIds.length ? companyIds.join(",") : undefined,
           machine_ids: machineIds.length ? machineIds.join(",") : undefined,
-          flute_ids: fluteIds.length ? fluteIds.join(",") : undefined,
-          grades: grades.length ? grades.join(",") : undefined,
           shifts: shifts.length ? shifts.join(",") : undefined,
-          statuses: statuses.length ? statuses.join(",") : undefined,
+          job_types: jobTypes.length ? jobTypes.join(",") : undefined,
         };
-        const result = await cacheGetOrSet(cacheKey("complaint-summary-table", params), () =>
-          complaintDashboardApi.getSummaryTable(params),
+        const result = await cacheGetOrSet(cacheKey("reject-summary-table", params), () =>
+          dashboardApi.getSummaryTable(params),
         );
         if (alive) setData(result);
       } catch (err) {
@@ -160,32 +149,16 @@ export function ComplaintSummaryTable({
     return () => {
       alive = false;
     };
-  }, [
-    dimension,
-    grain,
-    periodsCount,
-    period,
-    from,
-    to,
-    departmentIds,
-    problemIds,
-    companyIds,
-    machineIds,
-    fluteIds,
-    grades,
-    shifts,
-    statuses,
-  ]);
+  }, [dimension, grain, periodsCount, period, from, to, departmentIds, machineIds, shifts, jobTypes]);
 
   function handleGrainChange(nextGrain) {
     setGrain(nextGrain);
-    setPeriodsCount(DEFAULT_PERIODS[nextGrain] ?? 3);
+    setPeriodsCount(DEFAULT_PERIODS[nextGrain] ?? 6);
   }
 
   const periods = useMemo(() => data?.periods || [], [data]);
   const noun = GRAIN_NOUN[data?.grain || grain] || "ช่วง";
 
-  // Expanding a problem row into problems would just repeat itself.
   const rows = useMemo(() => {
     const source = data?.rows || [];
     if (data?.dimension === "problem") {
@@ -204,17 +177,14 @@ export function ComplaintSummaryTable({
         dataIndex: "name",
         key: "name",
         fixed: "left",
-        width: 260,
+        width: 240,
         render: (value, row) => (
           <div className="min-w-0">
             <div className="text-[13px] leading-5 font-semibold break-words text-slate-900">
               {value}
             </div>
-            {row.name_en ? (
-              <div className="text-[11px] leading-4 text-slate-400">{row.name_en}</div>
-            ) : null}
             {row.top_problems?.length ? (
-              <div className="mt-1 text-[11px] leading-4 break-words text-slate-500">
+              <div className="mt-1 text-[12px] leading-4 break-words font-medium text-slate-700">
                 {row.top_problems.join(" · ")}
               </div>
             ) : null}
@@ -232,8 +202,9 @@ export function ComplaintSummaryTable({
         align: "center",
         width: 90,
         render: (value) => (
-          <span className="text-[13px] font-semibold tabular-nums text-sky-700">
-            {qty(value, 1)}
+          <span className="text-[14px] font-bold tabular-nums text-sky-800">
+            {qty(value, 1)}{" "}
+            <span className="text-[11px] font-semibold text-slate-600">ครั้ง</span>
           </span>
         ),
       },
@@ -250,8 +221,8 @@ export function ComplaintSummaryTable({
         ),
         key: item.key,
         align: "center",
-        width: 96,
-        className: item.key === lastKey ? "cst-latest" : undefined,
+        width: 118,
+        className: item.key === lastKey ? "rst-latest" : undefined,
         render: (_value, row) => (
           <CountCell
             value={row.values?.find((cell) => cell.period_key === item.key)}
@@ -260,13 +231,29 @@ export function ComplaintSummaryTable({
         ),
       })),
       {
-        title: "รวม",
+        title: "รวมครั้ง",
         dataIndex: "total_count",
         key: "total_count",
         align: "center",
-        width: 90,
+        width: 100,
         render: (value) => (
-          <span className="text-[14px] font-bold tabular-nums text-slate-900">{qty(value, 0)}</span>
+          <span className="text-[15px] font-bold tabular-nums text-slate-900">
+            {qty(value, 0)}{" "}
+            <span className="text-[11px] font-semibold text-slate-600">ครั้ง</span>
+          </span>
+        ),
+      },
+      {
+        title: "มูลค่า",
+        dataIndex: "total_reject_amount",
+        key: "total_reject_amount",
+        align: "right",
+        width: 130,
+        render: (value) => (
+          <span className="text-[13px] font-bold tabular-nums text-orange-800">
+            {money(value)}{" "}
+            <span className="text-[11px] font-semibold">บาท</span>
+          </span>
         ),
       },
       {
@@ -287,7 +274,7 @@ export function ComplaintSummaryTable({
   return (
     <div className="flex flex-col gap-3">
       <style>{`
-        .complaint-summary-table .ant-table-thead > tr > th {
+        .reject-summary-table .ant-table-thead > tr > th {
           background: #0f172a !important;
           color: #ffffff !important;
           font-size: 12px;
@@ -297,19 +284,19 @@ export function ComplaintSummaryTable({
           top: 0;
           z-index: 3;
         }
-        .complaint-summary-table .ant-table-thead > tr > th.ant-table-cell-fix-left {
+        .reject-summary-table .ant-table-thead > tr > th.ant-table-cell-fix-left {
           z-index: 4;
         }
-        .complaint-summary-table .ant-table-thead > tr > th::before { display: none !important; }
-        .complaint-summary-table .ant-table-tbody > tr > td { padding: 8px !important; }
-        .complaint-summary-table .cst-latest { background-color: #fff7ed; }
-        .complaint-summary-table .ant-table-thead > tr > th.cst-latest {
+        .reject-summary-table .ant-table-thead > tr > th::before { display: none !important; }
+        .reject-summary-table .ant-table-tbody > tr > td { padding: 8px !important; }
+        .reject-summary-table .rst-latest { background-color: #fff7ed; }
+        .reject-summary-table .ant-table-thead > tr > th.rst-latest {
           background: #7f1d1d !important;
         }
-        .complaint-summary-table .ant-table-row-level-1 > td:first-child {
+        .reject-summary-table .ant-table-row-level-1 > td:first-child {
           background-color: #f8fafc;
         }
-        .complaint-summary-table .ant-table-summary > tr > td {
+        .reject-summary-table .ant-table-summary > tr > td {
           background: #1e3a8a !important;
           color: #ffffff !important;
           border-color: #1e40af !important;
@@ -355,7 +342,7 @@ export function ComplaintSummaryTable({
           ช่วงเทียบ <span className="font-bold text-slate-900">{rangeText}</span>
           {" · "}คอลัมน์สุดท้ายคือ{noun}ล่าสุดที่มีข้อมูล
           {data?.dimension === "problem" ? "" : " · กดแถวเพื่อดูปัญหาย่อย"}
-          {" · "}แต่ละช่อง = จำนวนครั้ง · สัดส่วน% · แผ่นของเสีย
+          {" · "}แต่ละช่อง = จำนวนครั้ง · สัดส่วน% · มูลค่า (บาท)
         </div>
       ) : null}
 
@@ -367,43 +354,46 @@ export function ComplaintSummaryTable({
             size="small"
             bordered
             rowKey="key"
-            className="complaint-summary-table"
+            className="reject-summary-table"
             dataSource={rows}
             columns={columns}
             pagination={rows.length > 12 ? { pageSize: 12, showSizeChanger: false } : false}
-            scroll={{ x: 260 + 90 + periods.length * 96 + 240 }}
+            scroll={{ x: 900 + periods.length * 100 }}
             sticky={{ offsetHeader: stickyOffset }}
-            expandable={{ childrenColumnName: "children" }}
+            expandable={
+              data?.dimension === "problem"
+                ? undefined
+                : { defaultExpandAllRows: false, indentSize: 16 }
+            }
             summary={() =>
               totals ? (
                 <Table.Summary fixed>
                   <Table.Summary.Row>
                     <Table.Summary.Cell index={0}>
-                      <span className="text-[13px] font-bold">
-                        รวมทั้งหมด ({rows.length} {DIMENSION_HEADER[data?.dimension] || "รายการ"})
-                      </span>
+                      <span className="font-bold">{totals.name}</span>
                     </Table.Summary.Cell>
                     <Table.Summary.Cell index={1} align="center">
-                      <span className="text-[13px] font-semibold tabular-nums">
-                        {qty(totals.avg_count, 1)}
-                      </span>
+                      <span className="tabular-nums">{qty(totals.avg_count, 1)}</span>
                     </Table.Summary.Cell>
                     {periods.map((item, index) => {
-                      const cell = totals.values?.find((value) => value.period_key === item.key);
+                      const cell = totals.values?.find((v) => v.period_key === item.key);
                       return (
-                        <Table.Summary.Cell key={item.key} index={2 + index} align="center">
-                          <span className="text-[14px] font-bold tabular-nums">
-                            {qty(cell?.count, 0)} ครั้ง
+                        <Table.Summary.Cell key={item.key} index={index + 2} align="center">
+                          <span className="font-bold tabular-nums">
+                            {qty(cell?.count || 0, 0)} ครั้ง
                           </span>
                         </Table.Summary.Cell>
                       );
                     })}
-                    <Table.Summary.Cell index={2 + periods.length} align="center">
-                      <span className="text-[14px] font-bold tabular-nums">
-                        {qty(totals.total_count, 0)}
+                    <Table.Summary.Cell index={periods.length + 2} align="center">
+                      <span className="font-bold tabular-nums">{qty(totals.total_count, 0)} ครั้ง</span>
+                    </Table.Summary.Cell>
+                    <Table.Summary.Cell index={periods.length + 3} align="right">
+                      <span className="font-bold tabular-nums">
+                        {money(totals.total_reject_amount)} บาท
                       </span>
                     </Table.Summary.Cell>
-                    <Table.Summary.Cell index={3 + periods.length} align="center">
+                    <Table.Summary.Cell index={periods.length + 4} align="center">
                       <StatusPill status={totals.status} delta={totals.delta} />
                     </Table.Summary.Cell>
                   </Table.Summary.Row>
@@ -411,11 +401,9 @@ export function ComplaintSummaryTable({
               ) : null
             }
           />
-        ) : !loading && !error ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="ไม่มีข้อมูลในช่วงที่เลือก" />
-        ) : (
-          <div className="h-[240px]" />
-        )}
+        ) : !loading ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="ไม่มีข้อมูลในช่วงนี้" />
+        ) : null}
       </Spin>
     </div>
   );

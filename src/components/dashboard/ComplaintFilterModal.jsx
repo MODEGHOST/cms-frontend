@@ -6,6 +6,7 @@ const PERIOD_OPTIONS = [
   { value: "day", label: "วันนี้" },
   { value: "week", label: "สัปดาห์นี้" },
   { value: "month", label: "เดือนนี้" },
+  { value: "last_month", label: "เดือนที่แล้ว" },
   { value: "all", label: "ทั้งหมด" },
   { value: "custom", label: "กำหนดเอง" },
 ];
@@ -141,7 +142,7 @@ export function ComplaintFilterModal({
                 className="w-full"
                 value={draft.dateRange}
                 onChange={(range) => patch({ dateRange: range })}
-                format="YYYY-MM-DD"
+                format="DD/MM/YYYY"
                 allowClear={false}
               />
             </div>

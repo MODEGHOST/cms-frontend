@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Avatar, Button, Drawer, Menu, Tooltip } from "antd";
+import { Alert, Avatar, Button, Drawer, Dropdown, Menu, Tooltip } from "antd";
 import {
   DashboardOutlined,
   DatabaseOutlined,
@@ -11,18 +11,25 @@ import {
   MenuOutlined,
   MenuUnfoldOutlined,
   SettingOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
 import { complaintApi } from "../services/api";
-import { canManageSystem } from "../utils/authz";
+import { canAccessMasters, isBuiltInAdmin } from "../utils/authz";
 
 function buildNavGroups(user, complaintInboxCount = 0) {
   const systemChildren = [
     { key: "/activity-logs", icon: <HistoryOutlined />, label: "Activity Log" },
-    { key: "/masters", icon: <DatabaseOutlined />, label: "Master Data" },
   ];
-  if (canManageSystem(user)) {
+  if (canAccessMasters(user)) {
+    systemChildren.push({
+      key: "/masters",
+      icon: <DatabaseOutlined />,
+      label: "Master Data",
+    });
+  }
+  if (isBuiltInAdmin(user)) {
     systemChildren.push({
       key: "/system",
       icon: <SettingOutlined />,
@@ -243,9 +250,15 @@ export function AppLayout() {
 
   useEffect(() => {
     refreshComplaintInboxCount();
-    const timer = window.setInterval(refreshComplaintInboxCount, 60_000);
-    return () => window.clearInterval(timer);
-  }, [refreshComplaintInboxCount, location.pathname]);
+    // รีเฟรชเบาๆ: ทุก 3 นาที + ตอนกลับมาโฟกัสหน้าต่าง (ไม่ยิงทุกครั้งที่เปลี่ยนหน้า)
+    const timer = window.setInterval(refreshComplaintInboxCount, 180_000);
+    const onFocus = () => refreshComplaintInboxCount();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [refreshComplaintInboxCount]);
 
   const sidebarWidth = collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
 
@@ -259,6 +272,7 @@ export function AppLayout() {
   );
 
   const title = useMemo(() => {
+    if (location.pathname === "/profile") return "ข้อมูลของฉัน";
     const item = navItems.find((entry) => entry.key === location.pathname);
     return item?.pageTitle || item?.label || "CMS";
   }, [location.pathname, navItems]);
@@ -274,6 +288,25 @@ export function AppLayout() {
   };
 
   const toggleCollapsed = () => setCollapsed((value) => !value);
+
+  const displayName = user?.display_name || user?.username || "?";
+
+  const userMenuItems = [
+    {
+      key: "profile",
+      icon: <UserOutlined />,
+      label: "ดูข้อมูลของฉัน",
+      onClick: () => navigate("/profile"),
+    },
+    { type: "divider" },
+    {
+      key: "logout",
+      icon: <LogoutOutlined />,
+      label: "ออกจากระบบ",
+      danger: true,
+      onClick: () => onLogout(),
+    },
+  ];
 
   return (
     <div className="min-h-screen bg-[#f5f6f8]">
@@ -339,12 +372,38 @@ export function AppLayout() {
               <div className="text-sm font-semibold text-slate-800">{title}</div>
             </div>
           </div>
-          <Avatar className="bg-red-100 text-red-700">
-            {(user?.display_name || user?.username || "?").slice(0, 1)}
-          </Avatar>
+          <Dropdown
+            menu={{ items: userMenuItems }}
+            placement="bottomRight"
+            trigger={["click"]}
+          >
+            <button
+              type="button"
+              className="cursor-pointer rounded-full border-0 bg-transparent p-0"
+              aria-label="เมนูบัญชีผู้ใช้"
+            >
+              <Avatar className="bg-red-700">
+                {displayName.slice(0, 1)}
+              </Avatar>
+            </button>
+          </Dropdown>
         </header>
 
         <main className="mx-auto max-w-[1280px] p-4 md:p-6">
+          {user && !user.telegram_linked && location.pathname !== "/profile" ? (
+            <Alert
+              className="mb-4"
+              type="warning"
+              showIcon
+              message="ทุกคนต้องผูก LFB Service"
+              description="ใช้ยืนยันตัวตนและรีเซ็ตรหัสผ่านทาง Telegram — กดผูกจากหน้าข้อมูลของฉัน"
+              action={
+                <Button size="small" type="primary" onClick={() => navigate("/profile")}>
+                  ไปผูกเลย
+                </Button>
+              }
+            />
+          ) : null}
           <Outlet />
         </main>
       </div>

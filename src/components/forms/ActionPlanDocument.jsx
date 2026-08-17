@@ -1,8 +1,17 @@
 import { useMemo, useState } from "react";
-import { Alert, App, Button, Card, Image, Space, Typography } from "antd";
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Image,
+  Space,
+  Typography,
+} from "antd";
 import { DownloadOutlined, FilePdfOutlined } from "@ant-design/icons";
 import { complaintApi } from "../../services/api";
 import { formatDate } from "../../utils/datetime";
+import { formatProblemLabel, formatProblemNameEn } from "../../utils/problems";
 
 function text(value, fallback = "-") {
   const raw = value == null ? "" : String(value).trim();
@@ -133,8 +142,8 @@ export function ActionPlanDocument({ record }) {
   const ownerName =
     plan.contributors.find((row) => String(row?.name || "").trim())?.name ||
     text(record?.responsible_department_name, "");
-  const actionDate = formatDate(record?.completed_date || record?.confirmed_at, "D/M/YY");
-  const madeDate = formatDate(record?.confirmed_at || record?.completed_date, "D/M/YY");
+  const actionDate = formatDate(record?.completed_date || record?.confirmed_at);
+  const madeDate = formatDate(record?.confirmed_at || record?.completed_date);
 
   const contributorRows = plan.contributors
     .filter(
@@ -185,7 +194,7 @@ export function ActionPlanDocument({ record }) {
         message="เอกสารพร้อมส่งลูกค้า — PDF 1 หน้า (รูปแบบเดียวกับที่ Export จาก Excel) กดดาวน์โหลดได้เลย"
       />
 
-      <div className="overflow-x-auto rounded border border-slate-400 bg-white p-3 text-[11px] text-slate-800 shadow-sm">
+      <div className="min-w-0 overflow-x-auto rounded border border-slate-400 bg-white p-3 text-[11px] text-slate-800 shadow-sm">
         <div className="mx-auto min-w-[640px] max-w-[794px]">
           {/* Header 3 ช่องเหมือน Excel */}
           <div className="grid grid-cols-[150px_1fr_150px] border border-slate-700">
@@ -225,12 +234,18 @@ export function ActionPlanDocument({ record }) {
                 <CheckMark checked={internal} />
                 <span className="whitespace-nowrap">หน่วยงานภายใน จาก (แผนก)</span>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="min-w-[140px] flex-1 border-b border-slate-700 px-1 py-0.5">
+              <div className="flex min-w-0 flex-nowrap items-center gap-2">
+                <span
+                  className="min-w-0 flex-1 truncate whitespace-nowrap border-b border-slate-700 px-1 py-0.5"
+                  title={internal ? text(record?.reported_by_department_name, "") : "-"}
+                >
                   {internal ? text(record?.reported_by_department_name, "") : "-"}
                 </span>
-                <span className="whitespace-nowrap">ถึง (แผนก)</span>
-                <span className="min-w-[120px] border-b border-slate-700 px-1 py-0.5">
+                <span className="shrink-0 whitespace-nowrap">ถึง (แผนก)</span>
+                <span
+                  className="min-w-[120px] max-w-[160px] truncate whitespace-nowrap border-b border-slate-700 px-1 py-0.5"
+                  title={internal ? text(record?.responsible_department_name, "") : "-"}
+                >
                   {internal ? text(record?.responsible_department_name, "") : "-"}
                 </span>
               </div>
@@ -239,12 +254,18 @@ export function ActionPlanDocument({ record }) {
                 <CheckMark checked={external} />
                 <span className="whitespace-nowrap">หน่วยงานภายนอก (ลูกค้า)</span>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="min-w-[140px] flex-1 border-b border-slate-700 px-1 py-0.5">
+              <div className="flex min-w-0 flex-nowrap items-center gap-2">
+                <span
+                  className="min-w-0 flex-1 truncate whitespace-nowrap border-b border-slate-700 px-1 py-0.5"
+                  title={external ? text(record?.company_name, "") : "-"}
+                >
                   {external ? text(record?.company_name, "") : "-"}
                 </span>
-                <span className="whitespace-nowrap">ถึง (แผนก)</span>
-                <span className="min-w-[120px] border-b border-slate-700 px-1 py-0.5">
+                <span className="shrink-0 whitespace-nowrap">ถึง (แผนก)</span>
+                <span
+                  className="min-w-[120px] max-w-[160px] truncate whitespace-nowrap border-b border-slate-700 px-1 py-0.5"
+                  title={external ? text(record?.responsible_department_name, "") : "-"}
+                >
                   {external ? text(record?.responsible_department_name, "") : "-"}
                 </span>
               </div>
@@ -256,27 +277,47 @@ export function ActionPlanDocument({ record }) {
             <tbody>
               <tr>
                 <td className="border border-slate-500 px-2 py-1.5" colSpan={2}>
-                  <span className="text-slate-600">ชื่อลูกค้า /Customer name :</span>{" "}
-                  <span className="border-b border-slate-700 px-1">
-                    {text(record?.company_name, "")}
-                  </span>
+                  <div className="flex min-w-0 items-baseline gap-1">
+                    <span className="shrink-0 text-slate-600">ชื่อลูกค้า /Customer name :</span>{" "}
+                    <span
+                      className="min-w-0 flex-1 truncate whitespace-nowrap border-b border-slate-700 px-1"
+                      title={text(record?.company_name, "")}
+                    >
+                      {text(record?.company_name, "")}
+                    </span>
+                  </div>
                 </td>
                 <td className="border border-slate-500 px-2 py-1.5" colSpan={2}>
-                  <span className="text-slate-600">ปัญหา / Problem</span>{" "}
-                  <span className="border-b border-slate-700 px-1">
-                    {text(record?.problem_name, "")}
-                  </span>
-                  {record?.problem_name_en ? (
-                    <span className="ml-2 font-medium text-red-700">{record.problem_name_en}</span>
-                  ) : null}
+                  <div className="flex min-w-0 flex-wrap items-baseline gap-1">
+                    <span className="shrink-0 text-slate-600">ปัญหา / Problem</span>{" "}
+                    <span
+                      className="truncate whitespace-nowrap border-b border-slate-700 px-1"
+                      title={formatProblemLabel(record)}
+                    >
+                      {formatProblemLabel(record)}
+                    </span>
+                    {formatProblemNameEn(record) ? (
+                      <span
+                        className="ml-1 truncate font-medium text-red-700"
+                        title={formatProblemNameEn(record)}
+                      >
+                        {formatProblemNameEn(record)}
+                      </span>
+                    ) : null}
+                  </div>
                 </td>
               </tr>
               <tr>
                 <td className="border border-slate-500 px-2 py-1.5" colSpan={2}>
-                  <span className="text-slate-600">รายละเอียด / Description</span>{" "}
-                  <span className="border-b border-slate-700 px-1">
-                    {text(record?.product_name, "")}
-                  </span>
+                  <div className="flex min-w-0 items-baseline gap-1">
+                    <span className="shrink-0 text-slate-600">รายละเอียด / Description</span>{" "}
+                    <span
+                      className="min-w-0 flex-1 truncate whitespace-nowrap border-b border-slate-700 px-1"
+                      title={text(record?.product_name, "")}
+                    >
+                      {text(record?.product_name, "")}
+                    </span>
+                  </div>
                 </td>
                 <td className="border border-slate-500 px-2 py-1.5" colSpan={2}>
                   <span className="text-slate-600">จำนวนต้องการ / Q&apos;ty</span>{" "}
@@ -323,16 +364,28 @@ export function ActionPlanDocument({ record }) {
               </tr>
               <tr>
                 <td className="border border-slate-500 px-2 py-1.5" colSpan={2}>
-                  <span className="text-slate-600">ทีม Sale/Cs :</span>{" "}
-                  <span className="border-b border-slate-700 px-1">
-                    {text(record?.sale_cs_staff, "")}
-                  </span>
+                  <div className="flex min-w-0 items-baseline gap-1">
+                    <span className="shrink-0 text-slate-600">ทีม Sale/Cs :</span>
+                    <span
+                      className="min-w-0 flex-1 truncate whitespace-nowrap border-b border-slate-700 px-1"
+                      title={text(record?.sale_cs_staff, "")}
+                    >
+                      {text(record?.sale_cs_staff, "")}
+                    </span>
+                  </div>
                 </td>
                 <td className="border border-slate-500 px-2 py-1.5" colSpan={2}>
-                  <span className="text-slate-600">หมายเหตุ /Remark :</span>{" "}
-                  <span className="inline-block min-w-[120px] border-b border-slate-700 px-1">
-                    {text(record?.remark, "") === "-" ? "" : text(record?.remark, "")}
-                  </span>
+                  <div className="flex min-w-0 items-baseline gap-1">
+                    <span className="shrink-0 text-slate-600">หมายเหตุ /Remark :</span>
+                    <span
+                      className="min-w-0 flex-1 truncate whitespace-nowrap border-b border-slate-700 px-1"
+                      title={
+                        text(record?.remark, "") === "-" ? "" : text(record?.remark, "")
+                      }
+                    >
+                      {text(record?.remark, "") === "-" ? "" : text(record?.remark, "")}
+                    </span>
+                  </div>
                 </td>
               </tr>
             </tbody>
@@ -490,10 +543,9 @@ export function ActionPlanDocument({ record }) {
                 { key: "production_specialist", label: "ผู้เชี่ยวชาญการผลิต" },
                 { key: "qa_deputy", label: "รองผู้จัดการฝ่ายประกันคุณภาพ" },
               ].map((role) => {
-                const sig = attachmentById(
-                  record?.attachments,
-                  plan.approvals?.[role.key]?.signatureId,
-                );
+                const approval = plan.approvals?.[role.key];
+                const sig = attachmentById(record?.attachments, approval?.signatureId);
+                const heading = String(approval?.position || "").trim() || role.label;
                 return (
                   <div
                     key={role.key}
@@ -503,7 +555,7 @@ export function ActionPlanDocument({ record }) {
                       {sig ? (
                         <Image
                           src={`${sig.url}?inline=1`}
-                          alt={role.label}
+                          alt={heading}
                           className="!h-full !w-full object-contain"
                           rootClassName="h-full w-full [&_.ant-image-img]:h-full [&_.ant-image-img]:w-full [&_.ant-image-img]:object-contain"
                         />
@@ -512,7 +564,7 @@ export function ActionPlanDocument({ record }) {
                       )}
                     </div>
                     <div className="w-full border-t border-dotted border-slate-500 pt-1 text-center text-[10px] leading-snug text-slate-600">
-                      {role.label}
+                      {heading}
                     </div>
                   </div>
                 );

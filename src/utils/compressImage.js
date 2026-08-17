@@ -2,11 +2,34 @@
  * Compress image files in the browser before upload.
  * Non-images are returned unchanged. If compression fails or result is larger, keeps original.
  */
+
+export function revokeBlobUrl(url) {
+  if (url && String(url).startsWith("blob:")) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** Revoke blob: URLs attached to Ant Design Upload file items. */
+export function revokeUploadFileListUrls(fileList = []) {
+  for (const item of fileList || []) {
+    if (!item) continue;
+    revokeBlobUrl(item.thumbUrl);
+    revokeBlobUrl(item.url);
+    revokeBlobUrl(item._localPreviewUrl);
+    if (item._localPreviewUrl) item._localPreviewUrl = null;
+  }
+}
+
+/** PDFKit รองรับแค่ JPEG/PNG — WebP/AVIF ฯลฯ ต้องแปลงก่อนอัปโหลด */
+const PDF_SAFE_IMAGE_TYPES = new Set(["image/jpeg", "image/jpg", "image/png"]);
+
 export async function compressImageFile(file, options = {}) {
   if (!file || typeof File === "undefined") return file;
   if (!String(file.type || "").startsWith("image/")) return file;
-  // Skip tiny images — already small enough
-  if (file.size > 0 && file.size < 80 * 1024) return file;
 
   const {
     maxWidth = 1600,
@@ -18,6 +41,11 @@ export async function compressImageFile(file, options = {}) {
   // Animated GIF / SVG — leave alone
   const type = String(file.type || "").toLowerCase();
   if (type === "image/gif" || type === "image/svg+xml") return file;
+
+  // WebP/AVIF ฯลฯ ต้องแปลงแม้ไฟล์เล็ก (ไม่งั้น PDF ใส่รูปไม่ได้)
+  const forceConvert = !PDF_SAFE_IMAGE_TYPES.has(type);
+  // Skip tiny images that PDF already accepts
+  if (!forceConvert && file.size > 0 && file.size < 80 * 1024) return file;
 
   return new Promise((resolve) => {
     const objectUrl = URL.createObjectURL(file);
@@ -51,7 +79,8 @@ export async function compressImageFile(file, options = {}) {
         canvas.toBlob(
           (blob) => {
             URL.revokeObjectURL(objectUrl);
-            if (!blob || blob.size >= file.size) {
+            // บังคับแปลงฟอร์แมตที่ไม่ปลอดภัยต่อ PDF แม้ผลลัพธ์จะใหญ่กว่าต้นฉบับ
+            if (!blob || (!forceConvert && blob.size >= file.size)) {
               resolve(file);
               return;
             }
@@ -110,11 +139,7 @@ export async function compressUploadFileList(fileList = []) {
       continue;
     }
     if (item.thumbUrl?.startsWith("blob:")) {
-      try {
-        URL.revokeObjectURL(item.thumbUrl);
-      } catch {
-        /* ignore */
-      }
+      revokeBlobUrl(item.thumbUrl);
     }
     next.push({
       ...item,
