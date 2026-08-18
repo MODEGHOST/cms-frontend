@@ -20,10 +20,11 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     server: {
       host: true,
-      port: 5173,
+      port: 5174,
+      strictPort: true,
       hmr: {
         host: "localhost",
-        port: 5173,
+        port: 5174,
         protocol: "ws",
       },
       watch: {
@@ -38,7 +39,7 @@ export default defineConfig(({ mode }) => {
     },
     preview: {
       host: true,
-      port: 5173,
+      port: 5174,
     },
   };
 });

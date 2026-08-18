@@ -17,6 +17,7 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
 import { complaintApi } from "../services/api";
 import { canAccessMasters, isBuiltInAdmin } from "../utils/authz";
+import { redirectToPortal } from "../utils/portal";
 
 function buildNavGroups(user, complaintInboxCount = 0) {
   const systemChildren = [
@@ -279,7 +280,7 @@ export function AppLayout() {
 
   const onLogout = async () => {
     await logout();
-    navigate("/login", { replace: true });
+    redirectToPortal();
   };
 
   const onNavigate = (path) => {

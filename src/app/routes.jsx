@@ -1,4 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
+import { useEffect } from "react";
+import { Spin } from "antd";
 import { RequireAuth } from "./RequireAuth";
 import { AppLayout } from "../layouts/AppLayout";
 import { LoginPage } from "../pages/LoginPage";
@@ -13,6 +15,18 @@ import { MastersPage } from "../pages/MastersPage";
 import { SystemPage } from "../pages/SystemPage";
 import { ProfilePage } from "../pages/ProfilePage";
 import { useSession } from "../hooks/useSession";
+import { redirectToPortal } from "../utils/portal";
+
+function PortalRedirect() {
+  useEffect(() => {
+    redirectToPortal();
+  }, []);
+  return (
+    <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
+      <Spin size="large" />
+    </div>
+  );
+}
 
 function PublicOnly({ children }) {
   const { isAuthenticated } = useSession();
@@ -23,15 +37,15 @@ function PublicOnly({ children }) {
 export function AppRoutes() {
   return (
     <Routes>
+      <Route path="/login" element={<PortalRedirect />} />
       <Route
-        path="/login"
+        path="/reset-password"
         element={
           <PublicOnly>
             <LoginPage />
           </PublicOnly>
         }
       />
-      <Route path="/reset-password" element={<LoginPage />} />
       <Route element={<RequireAuth />}>
         <Route element={<AppLayout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
