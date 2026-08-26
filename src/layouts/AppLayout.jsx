@@ -5,6 +5,7 @@ import {
   DatabaseOutlined,
   FormOutlined,
   FileSearchOutlined,
+  GlobalOutlined,
   HistoryOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
@@ -17,7 +18,7 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
 import { complaintApi } from "../services/api";
 import { canAccessMasters, isBuiltInAdmin } from "../utils/authz";
-import { redirectToPortal } from "../utils/portal";
+import { getPortalUrl, redirectToPortal } from "../utils/portal";
 
 function buildNavGroups(user, complaintInboxCount = 0) {
   const systemChildren = [
@@ -87,6 +88,37 @@ const SIDEBAR_EXPANDED = 248;
 const SIDEBAR_COLLAPSED = 76;
 const SIDEBAR_STORAGE_KEY = "cms.sidebar.collapsed";
 
+function BackToCenterButton({ collapsed = false }) {
+  const goCenter = () => {
+    window.location.href = getPortalUrl();
+  };
+
+  if (collapsed) {
+    return (
+      <Tooltip title="LFB CENTER" placement="right">
+        <Button
+          type="text"
+          className="!text-slate-400 hover:!bg-white/10 hover:!text-white"
+          icon={<GlobalOutlined />}
+          onClick={goCenter}
+        />
+      </Tooltip>
+    );
+  }
+
+  return (
+    <Button
+      type="text"
+      block
+      className="!justify-start !text-slate-300 hover:!bg-white/10 hover:!text-white"
+      icon={<GlobalOutlined />}
+      onClick={goCenter}
+    >
+      LFB CENTER
+    </Button>
+  );
+}
+
 function SidebarContent({
   selectedKey,
   onNavigate,
@@ -152,6 +184,7 @@ function SidebarContent({
       <div className={`border-t border-white/10 ${collapsed ? "p-2" : "p-4"}`}>
         {collapsed ? (
           <div className="flex flex-col items-center gap-2">
+            <BackToCenterButton collapsed />
             <Tooltip title={displayName} placement="right">
               <Avatar className="bg-red-100 text-red-700">
                 {displayName.slice(0, 1)}
@@ -178,6 +211,7 @@ function SidebarContent({
           </div>
         ) : (
           <div className="space-y-2">
+            <BackToCenterButton />
             <div className="flex items-center gap-3">
               <Avatar className="bg-red-100 text-red-700">
                 {displayName.slice(0, 1)}
