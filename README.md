@@ -37,7 +37,10 @@ Build toolchain รองรับ **Node.js 16.20.x** (`engines`: `>=16.20.0`) 
 
 แนะนำ: build `dist/` บนเครื่อง dev (Node 18/20 ก็ได้) แล้วอัปโหลด **เนื้อใน `dist/`** ขึ้น IIS ที่ `/lfb_cms/frontend` (ต้องมี `web.config` ใน dist — Vite copy จาก `public/`)
 
-Production build ตั้ง `base` เป็น `/lfb_cms/frontend/` และเรียก API ที่ `/lfb_cms/backend/api` (เหมือน IPMS ที่ `/lfb_ipms/...`)
+Production build ตั้ง `base` เป็น `/lfb_cms/frontend/`  
+API เรียก **PM2 ตรง** ที่ `http://<host>:4001/lfb_cms/backend` (host เดียวกับหน้าเว็บ — ไม่ต้อง IIS proxy / Convert backend)
+
+Override ได้ด้วย `VITE_API_URL` ใน `.env.production` ก่อน build
 
 ## รัน
 

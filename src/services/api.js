@@ -1,9 +1,25 @@
 import axios from "axios";
 
-// Local (Vite proxy): same origin /api — Production (IIS): /lfb_cms/backend/api
-const apiOrigin =
-  import.meta.env.VITE_API_URL ||
-  (import.meta.env.PROD ? "/lfb_cms/backend" : "");
+/** PM2 on company server (IPMS uses 4000). Override: VITE_API_URL or VITE_API_PORT. */
+const PRODUCTION_API_PORT = import.meta.env.VITE_API_PORT || "4001";
+const PRODUCTION_API_PATH = "/lfb_cms/backend";
+
+function resolveApiOrigin() {
+  if (import.meta.env.VITE_API_URL) {
+    return String(import.meta.env.VITE_API_URL).replace(/\/$/, "");
+  }
+  if (!import.meta.env.PROD) {
+    return "";
+  }
+  // Production: call PM2 directly on same host — no IIS proxy / Convert Application needed.
+  if (typeof window !== "undefined" && window.location?.hostname) {
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:${PRODUCTION_API_PORT}${PRODUCTION_API_PATH}`;
+  }
+  return PRODUCTION_API_PATH;
+}
+
+const apiOrigin = resolveApiOrigin();
 
 const api = axios.create({
   baseURL: apiOrigin,
