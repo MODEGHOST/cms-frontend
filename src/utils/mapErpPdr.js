@@ -1,7 +1,80 @@
+/** Reject: sync จาก ERP ทุกครั้ง (ไม่ใช่เติมเฉพาะช่องว่าง) */
+export const REJECT_ERP_ALWAYS_SYNC = new Set([
+  "size",
+  "price_per_sheet",
+  "weight_per_sheet",
+]);
+
+function toNum(value) {
+  if (value == null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function roundPrice(value, digits = 4) {
+  const factor = 10 ** digits;
+  return Math.round(Number(value) * factor) / factor;
+}
+
+/**
+ * แปลงราคา Sales Line (UOM เช่น แผ่น*2) → ราคา/แผ่นเล็ก
+ * ตรงกับ logic ใน deploy-server/erp/lib/PdrDb.php
+ */
+export function deriveSmallSheetPriceFromErp(erpRow) {
+  if (!erpRow || typeof erpRow !== "object") return null;
+
+  const salesUnitPrice = toNum(erpRow.sales_unit_price);
+  const uomQtyPer = toNum(erpRow.uom_qty_per);
+  const lineAmount = toNum(erpRow.line_amount);
+  const demandQty = toNum(erpRow.demand_qty);
+  const apiPrice = toNum(erpRow.price_per_sheet);
+
+  if (salesUnitPrice != null && uomQtyPer != null && uomQtyPer > 0) {
+    return roundPrice(salesUnitPrice / uomQtyPer);
+  }
+
+  const uomText = String(erpRow.unit_of_measure || "").trim();
+  const uomMatch =
+    uomText.match(/(?:แผ่น\s*)?\*\s*(\d+(?:\.\d+)?)/i) ||
+    uomText.match(/\*\s*(\d+(?:\.\d+)?)/);
+  if (salesUnitPrice != null && uomMatch) {
+    const mult = Number(uomMatch[1]);
+    if (Number.isFinite(mult) && mult > 0) {
+      return roundPrice(salesUnitPrice / mult);
+    }
+  }
+
+  if (
+    lineAmount != null &&
+    lineAmount > 0 &&
+    demandQty != null &&
+    demandQty > 0
+  ) {
+    return roundPrice(lineAmount / demandQty);
+  }
+
+  if (
+    apiPrice != null &&
+    salesUnitPrice != null &&
+    uomQtyPer != null &&
+    uomQtyPer > 1 &&
+    Math.abs(apiPrice - salesUnitPrice) < 0.0001
+  ) {
+    return roundPrice(salesUnitPrice / uomQtyPer);
+  }
+
+  return apiPrice;
+}
+
+function isRejectFieldSet(fields) {
+  return fields.includes("cut_qty");
+}
+
 /** ฟิลด์ที่อนุญาตเติมจาก ERP เข้า Reject (เติมเฉพาะช่องว่าง) */
 export const REJECT_ERP_FIELDS = [
   "pdr_no",
   "sale_order_no",
+  "order_no",
   "company_name",
   "customer_alias_name",
   "customer_ship_date",
@@ -57,11 +130,16 @@ function pickMapped(row, fields) {
   if (!row || typeof row !== "object") return {};
   const out = {};
   for (const key of fields) {
+    if (key === "price_per_sheet") {
+      const derived = deriveSmallSheetPriceFromErp(row);
+      if (derived != null) out[key] = derived;
+      continue;
+    }
     if (Object.prototype.hasOwnProperty.call(row, key) && !isEmpty(row[key])) {
       out[key] = row[key];
     }
   }
-  // demand_qty จาก ERP → order_qty ฝั่ง Reject ถ้ามี
+  // demand_qty จาก ERP → order_qty ฝั่ง Reject
   if (
     fields.includes("order_qty") &&
     isEmpty(out.order_qty) &&
@@ -125,7 +203,9 @@ export function mergeErpIntoRecord(record, erpRow, fields) {
   const next = { ...record };
   const filledKeys = [];
   for (const [key, value] of Object.entries(mapped)) {
-    const alwaysFromErp = key === "size";
+    const alwaysFromErp =
+      key === "size" ||
+      (isRejectFieldSet(fields) && REJECT_ERP_ALWAYS_SYNC.has(key));
     if (alwaysFromErp || isEmpty(record[key])) {
       if (alwaysFromErp && record[key] === value) continue;
       next[key] = value;

@@ -157,7 +157,7 @@ export function LoginPage() {
         <div className="relative z-10 flex items-center gap-4">
           <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl bg-white p-1.5 shadow-xl shadow-black/20">
             <img
-              src="/lee-fibreboard-logo.png"
+              src={`${import.meta.env.BASE_URL}lee-fibreboard-logo.png`}
               alt="บริษัท ลี้ไฟเบอร์บอร์ด จำกัด"
               className="h-full w-full object-contain"
             />

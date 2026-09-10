@@ -48,7 +48,11 @@ export function CompanyPulse({ headline }) {
       : headline.status === "worse"
         ? WarningOutlined
         : MinusOutlined;
-  const problems = (headline.focus_problems || []).filter(Boolean);
+  const problems = (headline.focus_problems || [])
+    .filter(Boolean)
+    .map((item) =>
+      typeof item === "string" ? { name: item, image_url: null } : item,
+    );
   const action =
     headline.focus_department && headline.focus_problem
       ? `ให้ ${headline.focus_department} เร่งแก้ ${headline.focus_problem}`
@@ -130,7 +134,30 @@ export function CompanyPulse({ headline }) {
         <div>
           <div className="text-[12px] font-semibold text-slate-700">ปัญหาที่ต้องแก้</div>
           <div className="text-sm font-bold leading-snug">
-            {problems.length ? problems.join(" · ") : "—"}
+            {problems.length ? (
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                {problems.map((problem, index) => (
+                  <span
+                    key={problem.id || `${problem.name}-${index}`}
+                    className="inline-flex items-center gap-1.5"
+                  >
+                    {problem.image_url ? (
+                      <img
+                        src={problem.image_url}
+                        alt=""
+                        className="h-8 w-8 shrink-0 rounded-md border border-slate-200 object-cover"
+                      />
+                    ) : null}
+                    <span>{problem.name}</span>
+                    {index < problems.length - 1 ? (
+                      <span className="text-slate-400">·</span>
+                    ) : null}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              "—"
+            )}
           </div>
           {action ? (
             <div className="mt-0.5 text-[13px] font-semibold text-slate-800">{action}</div>

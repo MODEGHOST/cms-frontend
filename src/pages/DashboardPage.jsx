@@ -20,6 +20,7 @@ import {
   FilterOutlined,
   FileSearchOutlined,
   TagsOutlined,
+  DeleteOutlined,
 } from "@ant-design/icons";
 import {
   Bar,
@@ -28,6 +29,8 @@ import {
   Cell,
   LabelList,
   Legend,
+  Line,
+  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -232,6 +235,36 @@ function KpiDetailModal({
             render: (v) => money(v),
             sorter: (a, b) => a.reject_amount - b.reject_amount,
           },
+          {
+            title: "ทำลาย BL",
+            dataIndex: "destroy_bl_qty",
+            align: "right",
+            width: 90,
+            render: (v) => qty(v, 0),
+            sorter: (a, b) => a.destroy_bl_qty - b.destroy_bl_qty,
+          },
+          {
+            title: "เงินทำลาย BL",
+            dataIndex: "destroy_bl_amount",
+            align: "right",
+            width: 120,
+            render: (v) => money(v),
+            sorter: (a, b) => a.destroy_bl_amount - b.destroy_bl_amount,
+          },
+          {
+            title: "ส่งคืน",
+            dataIndex: "return_to_customer_qty",
+            align: "right",
+            width: 80,
+            render: (v) => qty(v, 0),
+          },
+          {
+            title: "เงินส่งคืน",
+            dataIndex: "return_amount",
+            align: "right",
+            width: 110,
+            render: (v) => money(v),
+          },
         ]
       : [
           {
@@ -296,7 +329,7 @@ function KpiDetailModal({
       open={open}
       onCancel={onClose}
       footer={null}
-      width={type === "rejects" ? 1100 : 860}
+      width={type === "rejects" ? 1280 : 860}
       title={
         <div>
           <div className="text-base font-semibold text-slate-900">{meta.title}</div>
@@ -315,7 +348,7 @@ function KpiDetailModal({
         dataSource={rows}
         columns={columns}
         pagination={tablePagination}
-        scroll={{ x: type === "rejects" ? 980 : 700 }}
+        scroll={{ x: type === "rejects" ? 1180 : 700 }}
         locale={{ emptyText: "ไม่มีข้อมูลในช่วงนี้" }}
       />
     </Modal>
@@ -987,6 +1020,7 @@ export function DashboardPage() {
           trendStackKeys: trend.trendStackKeys,
           trendGrain: trend.trendGrain,
           trendStack: trend.trendStack || trendStack,
+          postClaimTrend: trend.postClaimTrend || [],
           filters: {
             ...(prev?.filters || {}),
             ...(trend.filters || {}),
@@ -1387,7 +1421,7 @@ export function DashboardPage() {
         {/* 1) KPI — overview first */}
         <section>
         <SectionTitle id="reject-overview">1) ภาพรวม Reject ช่วงนี้</SectionTitle>
-        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4 xl:gap-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-3 xl:gap-4">
           <KpiTile
             icon={<FileSearchOutlined />}
             label="จำนวน Reject"
@@ -1403,6 +1437,22 @@ export function DashboardPage() {
             hint="คลิกดูรายละเอียด · แผ่นเล็ก × ราคา/แผ่นเล็ก"
             tone="orange"
             onClick={() => openKpiModal("amount")}
+          />
+          <KpiTile
+            icon={<DeleteOutlined />}
+            label="แผ่นทำลาย BL"
+            value={`${(data?.kpi?.total_destroy_bl_qty || 0).toLocaleString("th-TH")} แผ่น`}
+            hint="คลิกดูรายการ · รวมจำนวนแผ่นทำลาย BL"
+            tone="rose"
+            onClick={() => openKpiModal("rejects")}
+          />
+          <KpiTile
+            icon={<DeleteOutlined />}
+            label="มูลค่าทำลาย BL"
+            value={`${money(data?.kpi?.total_destroy_bl_amount)} บาท`}
+            hint="คลิกดูรายการ · จากข้อมูลหลังการเคลม"
+            tone="amber"
+            onClick={() => openKpiModal("rejects")}
           />
           <KpiTile
             icon={<BankOutlined />}
@@ -1807,6 +1857,73 @@ export function DashboardPage() {
                         </Bar>
                       ))}
                     </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="ไม่มีข้อมูลในช่วงนี้" />
+              )}
+            </Spin>
+          </Panel>
+          <Panel
+            title="มูลค่าหลังเคลม — ทำลาย BL vs ส่งคืนลูกค้า"
+            subtitle="เส้น = เงินทำลาย BL / เงินส่งคืน รายช่วงเวลา · จากข้อมูลที่บันทึกใน Reject"
+          >
+            <Spin spinning={trendLoading}>
+              {(data?.postClaimTrend || []).length ? (
+                <div className="h-[280px]">
+                  <ResponsiveContainer>
+                    <LineChart
+                      data={data.postClaimTrend}
+                      margin={{ top: 12, right: 12, left: 0, bottom: 8 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis
+                        dataKey="label"
+                        tick={{ fontSize: 10 }}
+                        interval={
+                          data.postClaimTrend.length > 16 ? "preserveStartEnd" : 0
+                        }
+                        angle={data.postClaimTrend.length > 12 ? -30 : 0}
+                        textAnchor={data.postClaimTrend.length > 12 ? "end" : "middle"}
+                        height={data.postClaimTrend.length > 12 ? 50 : 30}
+                      />
+                      <YAxis
+                        tick={{ fontSize: 10 }}
+                        width={56}
+                        tickFormatter={(v) => qty(v, 0)}
+                      />
+                      <Tooltip
+                        formatter={(value, name) => [
+                          `${money(value)} บาท`,
+                          name === "destroy_bl_amount" ? "เงินทำลาย BL" : "เงินส่งคืนลูกค้า",
+                        ]}
+                        labelFormatter={(label) => label}
+                      />
+                      <Legend
+                        wrapperStyle={{ fontSize: 11, paddingTop: 4 }}
+                        formatter={(value) =>
+                          value === "destroy_bl_amount" ? "เงินทำลาย BL" : "เงินส่งคืนลูกค้า"
+                        }
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="destroy_bl_amount"
+                        name="destroy_bl_amount"
+                        stroke="#dc2626"
+                        strokeWidth={2}
+                        dot={{ r: 3 }}
+                        activeDot={{ r: 5 }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="return_amount"
+                        name="return_amount"
+                        stroke="#2563eb"
+                        strokeWidth={2}
+                        dot={{ r: 3 }}
+                        activeDot={{ r: 5 }}
+                      />
+                    </LineChart>
                   </ResponsiveContainer>
                 </div>
               ) : (

@@ -176,7 +176,7 @@ function MemoPreview({ record, values }) {
           </div>
           <div>
             <span className="font-bold">ORDER:</span>{" "}
-            <Under>{formatQty(record?.order_qty)}</Under>
+            <Under>{text(record?.order_no, "")}</Under>
           </div>
           <div>
             <span className="font-bold">เลขที่IV:</span>{" "}
@@ -230,7 +230,7 @@ function MemoPreview({ record, values }) {
 
           <div className="py-1">
             <img
-              src="/reject-memo-signature.png"
+              src={`${import.meta.env.BASE_URL}reject-memo-signature.png`}
               alt="ลายเซ็น"
               className="h-[78px] w-auto object-contain"
             />
@@ -385,8 +385,8 @@ function TagCard({ record, values, palletIndex }) {
         <div className="min-w-0">
           <div className="grid grid-cols-[1.6fr_0.6fr]">
             <TagCell className="py-3 text-center text-[18px] font-bold">
-              {formatQty(record?.order_qty)}
-              {record?.order_qty != null && record?.order_qty !== "" ? " -" : ""}
+              {text(record?.order_no, "")}
+              {record?.order_no != null && record?.order_no !== "" ? " -" : ""}
             </TagCell>
             <TagCell className="py-3 text-center text-[18px] font-bold">
               {text(record?.shift, "")}

@@ -200,7 +200,7 @@ export function ActionPlanDocument({ record }) {
           <div className="grid grid-cols-[150px_1fr_150px] border border-slate-700">
             <div className="flex items-center gap-2 border-r border-slate-700 px-2 py-2">
               <img
-                src="/lee-fibreboard-logo.png"
+                src={`${import.meta.env.BASE_URL}lee-fibreboard-logo.png`}
                 alt="LEE FIBREBOARD"
                 className="h-8 w-8 object-contain"
               />

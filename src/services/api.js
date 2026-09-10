@@ -198,18 +198,85 @@ async function downloadRejectPdf(id, pathSuffix, payload) {
   }
 }
 
-/** Beta_api_erp ผ่าน CMS backend — ปิดได้ด้วย ERP_API_ENABLED=0 */
+/**
+ * PHP ERP on IIS — direct call when VITE_ERP_URL is set or production same-origin.
+ * Dev default: use CMS backend proxy /api/erp/pdr instead (see erpApi.getPdr).
+ */
+function resolveErpOrigin() {
+  if (import.meta.env.VITE_ERP_URL) {
+    return String(import.meta.env.VITE_ERP_URL).replace(/\/$/, "");
+  }
+  if (import.meta.env.PROD && typeof window !== "undefined" && window.location?.origin) {
+    return `${window.location.origin}/lfb_cms/erp`;
+  }
+  return "";
+}
+
+async function fetchErpPdrDirect(pdrNo) {
+  const base = resolveErpOrigin();
+  if (!base) {
+    return { enabled: false, ok: false, data: [], error: "ERP URL not configured" };
+  }
+  const url = `${base}/api/pdr?pdr_no=${encodeURIComponent(pdrNo)}`;
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return {
+      enabled: true,
+      ok: false,
+      data: [],
+      error: body?.error || body?.message || `ERP HTTP ${response.status}`,
+    };
+  }
+  return {
+    enabled: true,
+    ok: Boolean(body?.ok),
+    data: Array.isArray(body?.data) ? body.data : [],
+    error: body?.error || null,
+  };
+}
+
+/** ERP PDR — เรียกผ่าน CMS backend (/api/erp/pdr) ก่อน; direct PHP เมื่อตั้ง VITE_ERP_URL */
 export const erpApi = {
-  getPdr: (pdrNo) =>
-    api
-      .get("/api/erp/pdr", { params: { pdr_no: pdrNo } })
-      .then((res) => res.data)
-      .catch((error) => ({
-        enabled: false,
+  getPdr: async (pdrNo) => {
+    const trimmed = String(pdrNo || "").trim();
+    if (!trimmed) {
+      return { enabled: true, ok: false, data: [], error: "ต้องระบุ pdr_no" };
+    }
+
+    try {
+      const res = await api.get("/api/erp/pdr", { params: { pdr_no: trimmed } });
+      const body = res.data || {};
+      return {
+        enabled: body.enabled !== false,
+        ok: Boolean(body.ok),
+        data: Array.isArray(body?.data) ? body.data : [],
+        error: body.error || null,
+      };
+    } catch (error) {
+      if (import.meta.env.VITE_ERP_URL) {
+        try {
+          return await fetchErpPdrDirect(trimmed);
+        } catch (directError) {
+          return {
+            enabled: true,
+            ok: false,
+            data: [],
+            error: directError?.message || "ERP unavailable",
+          };
+        }
+      }
+      const body = error?.response?.data;
+      return {
+        enabled: body?.enabled !== false,
         ok: false,
         data: [],
-        error: error?.message || "ERP unavailable",
-      })),
+        error: body?.error || body?.message || error?.message || "ERP unavailable",
+      };
+    }
+  },
 };
 
 export const complaintApi = {
@@ -310,6 +377,17 @@ export const masterApi = {
     api.post(`/api/masters/${key}`, payload).then((res) => res.data),
   update: (key, id, payload) =>
     api.patch(`/api/masters/${key}/${id}`, payload).then((res) => res.data),
+  uploadProblemImage: (id, file) => {
+    const form = new FormData();
+    form.append("file", file);
+    // Let the browser set multipart boundary — do not set Content-Type manually.
+    return api
+      .post(`/api/masters/problems/${id}/image`, form)
+      .then((res) => res.data);
+  },
+  deleteProblemImage: (id) =>
+    api.delete(`/api/masters/problems/${id}/image`).then((res) => res.data),
+  problemImageUrl: (id) => `${apiOrigin}/api/masters/problems/${id}/image`,
 };
 
 export const systemApi = {

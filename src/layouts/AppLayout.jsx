@@ -105,7 +105,7 @@ function SidebarContent({
       >
         <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/15 bg-white p-0.5 shadow-sm">
           <img
-            src="/lee-fibreboard-logo.png"
+            src={`${import.meta.env.BASE_URL}lee-fibreboard-logo.png`}
             alt="Lee Fibreboard"
             className="h-full w-full object-contain"
           />

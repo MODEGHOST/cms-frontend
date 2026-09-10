@@ -7,7 +7,7 @@ import {
 } from "../utils/mapErpPdr";
 
 /**
- * ดึง ERP แบบเบาๆ หลังเลือก record แล้ว — เติมช่องว่างเท่านั้น
+ * ดึง ERP หลังเลือก record — เติมช่องว่าง + sync ราคา/แผ่นเล็ก (UOM) ทุกครั้ง
  * ถ้า ERP ปิด/ล่ม: เงียบ ไม่กระทบการค้นหา CMS
  */
 export function useErpPdrEnrichment({

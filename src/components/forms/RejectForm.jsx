@@ -16,9 +16,14 @@ import { CloseOutlined, EditOutlined, RollbackOutlined, SaveOutlined } from "@an
 import dayjs from "dayjs";
 import { formatDate } from "../../utils/datetime";
 import { useSession } from "../../hooks/useSession";
-import { rejectApi } from "../../services/api";
+import { rejectApi, erpApi } from "../../services/api";
 import { canUpdateRejects } from "../../utils/authz";
 import { parseShipQty } from "../../utils/parseShipQty";
+import {
+  deriveSmallSheetPriceFromErp,
+  mergeErpIntoRecord,
+  REJECT_ERP_FIELDS,
+} from "../../utils/mapErpPdr";
 import {
   ensureProblemOptions,
   problemNamesOf,
@@ -76,7 +81,7 @@ const SECTIONS = [
       ["shift", "กะ"],
       ["job_type", "ลักษณะงาน", "select"],
       ["size", "Size"],
-      ["order_qty", "Order", "number"],
+      ["order_no", "Order", "text"],
       ["problem_name", "ปัญหา", "select"],
       ["cause", "สาเหตุ", "textarea"],
       ["vehicle_plate", "ทะเบียน"],
@@ -158,6 +163,33 @@ function calcClaimTotals(record, claimQty) {
   }
   if (pricePerSheet != null) {
     updates.claim_amount = roundCalc(claimQty * pricePerSheet);
+  }
+  return updates;
+}
+
+/** ทำลาย BL / ส่งคืนลูกค้า — ใช้ราคา/น้ำหนักต่อแผ่นเล็ก (หลังแปลง UOM) */
+function calcPostClaimDisplay(record) {
+  const weightPerSheet = toNum(record?.weight_per_sheet);
+  const pricePerSheet = toNum(record?.price_per_sheet);
+  const destroyQty = toNum(record?.destroy_bl_qty);
+  const returnQty = toNum(record?.return_to_customer_qty);
+  const updates = {};
+
+  if (weightPerSheet != null) {
+    if (destroyQty != null) {
+      updates.destroy_bl_weight = roundCalc(destroyQty * weightPerSheet);
+    }
+    if (returnQty != null) {
+      updates.return_kg = roundCalc(returnQty * weightPerSheet);
+    }
+  }
+  if (pricePerSheet != null) {
+    if (destroyQty != null) {
+      updates.destroy_bl_amount = roundCalc(destroyQty * pricePerSheet);
+    }
+    if (returnQty != null) {
+      updates.return_amount = roundCalc(returnQty * pricePerSheet);
+    }
   }
   return updates;
 }
@@ -245,9 +277,10 @@ function calcPostClaimFromClaim(record, allValues, changed) {
 const COMPUTED_CLAIM_FIELDS = new Set(["claim_weight_kg", "claim_amount"]);
 
 function toFormValues(record) {
+  const display = withClaimDisplay(record);
   const values = {};
   for (const name of QC_REQUIRED_FIELDS) {
-    const value = record?.[name];
+    const value = display?.[name];
     if (name === "doc_notify_date") {
       // Auto-fill today only when empty; keep existing date otherwise.
       values[name] = value ? dayjs(value) : dayjs();
@@ -269,31 +302,49 @@ function toFormValues(record) {
     ) {
       values[name] = value == null || value === "" ? null : Number(value);
     } else if (name === "problem_name") {
-      values[name] = problemNamesOf(record);
+      values[name] = problemNamesOf(display);
     } else {
       values[name] = value ?? "";
     }
   }
 
-  const claimQty = toNum(record?.claim_sheet_qty);
-  const computed = calcClaimTotals(record, claimQty);
+  const claimQty = toNum(display?.claim_sheet_qty);
+  const computed = calcClaimTotals(display, claimQty);
+  const postClaim = calcPostClaimDisplay(display);
   values.claim_weight_kg =
-    computed.claim_weight_kg ?? toNum(record?.claim_weight_kg);
-  values.claim_amount = computed.claim_amount ?? toNum(record?.claim_amount);
+    computed.claim_weight_kg ?? toNum(display?.claim_weight_kg);
+  values.claim_amount = computed.claim_amount ?? toNum(display?.claim_amount);
+  values.destroy_bl_weight =
+    postClaim.destroy_bl_weight ?? toNum(display?.destroy_bl_weight);
+  values.destroy_bl_amount =
+    postClaim.destroy_bl_amount ?? toNum(display?.destroy_bl_amount);
+  values.return_kg = postClaim.return_kg ?? toNum(display?.return_kg);
+  values.return_amount = postClaim.return_amount ?? toNum(display?.return_amount);
   return values;
 }
 
-/** View-mode: show stored claim totals, or compute from ERP weight/price when empty. */
+/** View-mode: แปลงราคา/แผ่นเล็กจาก UOM ก่อนแสดง แล้วคำนวณจำนวนเงิน/น้ำหนัก */
 function withClaimDisplay(record) {
   if (!record) return record;
-  const claimQty = toNum(record.claim_sheet_qty);
-  const computed = calcClaimTotals(record, claimQty);
+  const derivedPrice = deriveSmallSheetPriceFromErp(record);
+  const normalized =
+    derivedPrice != null
+      ? { ...record, price_per_sheet: derivedPrice }
+      : record;
+  const claimQty = toNum(normalized.claim_sheet_qty);
+  const computed = calcClaimTotals(normalized, claimQty);
+  const postClaim = calcPostClaimDisplay(normalized);
   return {
-    ...record,
+    ...normalized,
+    ...postClaim,
     claim_weight_kg:
-      toNum(record.claim_weight_kg) ?? computed.claim_weight_kg ?? record.claim_weight_kg,
+      computed.claim_weight_kg ??
+      toNum(normalized.claim_weight_kg) ??
+      normalized.claim_weight_kg,
     claim_amount:
-      toNum(record.claim_amount) ?? computed.claim_amount ?? record.claim_amount,
+      computed.claim_amount ??
+      toNum(normalized.claim_amount) ??
+      normalized.claim_amount,
   };
 }
 
@@ -635,6 +686,7 @@ export function RejectForm({ record, onSaved, onReturned }) {
   const [returning, setReturning] = useState(false);
   const [enriching, setEnriching] = useState(false);
   const enrichedIdRef = useRef(null);
+  const pricingSyncedRef = useRef(null);
   const [selectOptions, setSelectOptions] = useState({
     department_name: [],
     problem_name: [],
@@ -652,53 +704,72 @@ export function RejectForm({ record, onSaved, onReturned }) {
   const onSavedRef = useRef(onSaved);
   onSavedRef.current = onSaved;
 
-  // ดึง ERP เติมช่องว่างเฉพาะใบที่มาจาก Complaint (stub)
-  // ใบจาก Excel / ERP ปกติที่มีใน CMS แล้ว — ไม่เรียก
+  // Sync ราคา/แผ่นเล็กจาก ERP (แปลง UOM ก่อนแสดง) — ทุกใบที่มี pdr_no
   useEffect(() => {
     const id = record?.id;
-    if (!id || record?._fromErp || !canEdit) return;
-    if (record?.source !== "complaint") return;
-    if (enrichedIdRef.current === Number(id)) return;
+    const pdrNo = String(record?.pdr_no || "").trim();
+    if (!pdrNo || record?._fromErp) return;
 
-    const needsEnrich = !record.sale_order_no || !record.size;
-    if (!needsEnrich) {
-      enrichedIdRef.current = Number(id);
-      return;
-    }
+    const syncKey = id ? `id:${id}` : `pdr:${pdrNo}`;
+    if (pricingSyncedRef.current === syncKey) return;
 
     let cancelled = false;
-    enrichedIdRef.current = Number(id);
-    setEnriching(true);
+    pricingSyncedRef.current = syncKey;
 
-    rejectApi
-      .enrichFromErp(id)
+    const syncFromErpRow = (erpRow) => {
+      if (cancelled || !erpRow) return;
+      const { record: next, filledKeys } = mergeErpIntoRecord(
+        record,
+        erpRow,
+        REJECT_ERP_FIELDS,
+      );
+      if (!filledKeys.length) return;
+      onSavedRef.current?.(next);
+    };
+
+    if (id && canEdit) {
+      enrichedIdRef.current = Number(id);
+      setEnriching(true);
+      rejectApi
+        .enrichFromErp(id)
+        .then((result) => {
+          if (cancelled) return;
+          if (result?.data) onSavedRef.current?.(result.data);
+          if (result?.changed) {
+            message.info("อัปเดตราคา/แผ่นเล็กจาก ERP แล้ว");
+          }
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          message.warning(error?.message || "ดึงข้อมูลจาก ERP ไม่สำเร็จ");
+          erpApi
+            .getPdr(pdrNo)
+            .then((result) => {
+              if (cancelled || !result?.ok) return;
+              syncFromErpRow(result.data?.[0]);
+            })
+            .catch(() => {});
+        })
+        .finally(() => {
+          if (!cancelled) setEnriching(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    erpApi
+      .getPdr(pdrNo)
       .then((result) => {
-        if (cancelled) return;
-        if (result?.data) onSavedRef.current?.(result.data);
-        if (result?.changed) {
-          message.info("ดึงข้อมูล Reject จาก ERP แล้ว");
-        }
+        if (cancelled || !result?.ok) return;
+        syncFromErpRow(result.data?.[0]);
       })
-      .catch((error) => {
-        if (cancelled) return;
-        message.warning(error?.message || "ดึงข้อมูลจาก ERP ไม่สำเร็จ");
-      })
-      .finally(() => {
-        if (!cancelled) setEnriching(false);
-      });
+      .catch(() => {});
 
     return () => {
       cancelled = true;
     };
-  }, [
-    record?.id,
-    record?._fromErp,
-    record?.source,
-    record?.sale_order_no,
-    record?.size,
-    canEdit,
-    message,
-  ]);
+  }, [record?.id, record?.pdr_no, record?._fromErp, canEdit, message]);
 
   useEffect(() => {
     setEditing(false);
@@ -800,7 +871,7 @@ export function RejectForm({ record, onSaved, onReturned }) {
         `จำนวนต้องไม่เกินลูกค้าเคลม (${claimQty.toLocaleString("th-TH")})`,
       );
     }
-    const updates = calcPostClaimFromClaim(record, allValues, changed);
+    const updates = calcPostClaimFromClaim(displayRecord, allValues, changed);
     if (Object.keys(updates).length) {
       form.setFieldsValue(updates);
     }
@@ -820,7 +891,8 @@ export function RejectForm({ record, onSaved, onReturned }) {
           ? values.reject_received_date.format("YYYY-MM-DD")
           : null,
         actual_ship_qty: parseShipQty(values.actual_ship_qty),
-        ...calcClaimTotals(record, toNum(values.claim_sheet_qty)),
+        ...calcClaimTotals(displayRecord, toNum(values.claim_sheet_qty)),
+        ...calcPostClaimDisplay(displayRecord),
       };
       let recordId = record.id;
       if (!recordId) {
@@ -833,6 +905,7 @@ export function RejectForm({ record, onSaved, onReturned }) {
           machine_name: record.machine_name,
           flute_name: record.flute_name,
           size: record.size,
+          order_no: record.order_no,
           order_qty: record.order_qty,
           demand_qty: record.demand_qty,
           shift: record.shift,
@@ -840,8 +913,8 @@ export function RejectForm({ record, onSaved, onReturned }) {
           customer_ship_date: record.customer_ship_date,
           delivery_date: record.delivery_date,
           production_date: record.production_date,
-          weight_per_sheet: record.weight_per_sheet,
-          price_per_sheet: record.price_per_sheet,
+          weight_per_sheet: displayRecord.weight_per_sheet,
+          price_per_sheet: displayRecord.price_per_sheet,
           cut_qty: record.cut_qty,
           item_code: record.item_code,
           big_sheet_qty: record.big_sheet_qty,

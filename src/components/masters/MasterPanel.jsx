@@ -12,12 +12,15 @@ import {
 } from "antd";
 import { masterApi } from "../../services/api";
 import { useSession } from "../../hooks/useSession";
-import { canManageMasters } from "../../utils/authz";
+import { canManageMasters, canManageProblemImages } from "../../utils/authz";
+import { ProblemImageCell } from "./ProblemImageCell";
 
 export function MasterPanel({ masterKey, hasCompany }) {
   const { message } = App.useApp();
   const { user } = useSession();
   const canEdit = canManageMasters(user);
+  const canEditProblemImage = masterKey === "problems" && canManageProblemImages(user);
+  const isProblems = masterKey === "problems";
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -130,6 +133,20 @@ export function MasterPanel({ masterKey, hasCompany }) {
     if (hasCompany) {
       cols.unshift({ title: "บริษัท", dataIndex: "company_name" });
     }
+    if (isProblems) {
+      cols.push({
+        title: "รูป",
+        key: "image",
+        width: 220,
+        render: (_, row) => (
+          <ProblemImageCell
+            row={row}
+            canEdit={canEditProblemImage}
+            onUpdated={() => load()}
+          />
+        ),
+      });
+    }
     if (canEdit) {
       cols.push({
         title: "",
@@ -144,7 +161,7 @@ export function MasterPanel({ masterKey, hasCompany }) {
     }
     return cols;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasCompany, hasNameEn, isCompanies, canEdit]);
+  }, [hasCompany, hasNameEn, isCompanies, isProblems, canEdit, canEditProblemImage]);
 
   return (
     <div>
