@@ -8,6 +8,9 @@ import { RejectFormPage } from "../pages/RejectFormPage";
 import { ComplaintDashboardPage } from "../pages/ComplaintDashboardPage";
 import { ComplaintsPage } from "../pages/ComplaintsPage";
 import { ComplaintFormPage } from "../pages/ComplaintFormPage";
+import { ServiceTransportDashboardPage } from "../pages/ServiceTransportDashboardPage";
+import { ServiceTransportPage } from "../pages/ServiceTransportPage";
+import { ServiceTransportFormPage } from "../pages/ServiceTransportFormPage";
 import { ActivityLogsPage } from "../pages/ActivityLogsPage";
 import { MastersPage } from "../pages/MastersPage";
 import { SystemPage } from "../pages/SystemPage";
@@ -41,6 +44,15 @@ export function AppRoutes() {
           <Route path="/complaint-dashboard" element={<ComplaintDashboardPage />} />
           <Route path="/complaints" element={<ComplaintsPage />} />
           <Route path="/complaint-form" element={<ComplaintFormPage />} />
+          <Route
+            path="/service-transport-dashboard"
+            element={<ServiceTransportDashboardPage />}
+          />
+          <Route path="/service-transport" element={<ServiceTransportPage />} />
+          <Route
+            path="/service-transport-form"
+            element={<ServiceTransportFormPage />}
+          />
           <Route path="/activity-logs" element={<ActivityLogsPage />} />
           <Route path="/masters" element={<MastersPage />} />
           <Route path="/system" element={<SystemPage />} />

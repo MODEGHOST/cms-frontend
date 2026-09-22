@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Avatar, Button, Drawer, Dropdown, Menu, Tooltip } from "antd";
 import {
+  CarOutlined,
   DashboardOutlined,
   DatabaseOutlined,
   FormOutlined,
@@ -18,7 +19,7 @@ import { useSession } from "../hooks/useSession";
 import { complaintApi } from "../services/api";
 import { canAccessMasters, isBuiltInAdmin } from "../utils/authz";
 
-function buildNavGroups(user, complaintInboxCount = 0) {
+function buildNavGroups(user, complaintInboxCount = 0, transportInboxCount = 0) {
   const systemChildren = [
     { key: "/activity-logs", icon: <HistoryOutlined />, label: "Activity Log" },
   ];
@@ -41,6 +42,11 @@ function buildNavGroups(user, complaintInboxCount = 0) {
     complaintInboxCount > 0
       ? `รายการ Complaint (${complaintInboxCount})`
       : "รายการ Complaint";
+
+  const transportListLabel =
+    transportInboxCount > 0
+      ? `รายการ บริการ/ขนส่ง (${transportInboxCount})`
+      : "รายการ บริการ/ขนส่ง";
 
   return [
     {
@@ -75,6 +81,28 @@ function buildNavGroups(user, complaintInboxCount = 0) {
       ],
     },
     {
+      key: "service-transport",
+      label: "Complaint บริการ/ขนส่ง",
+      children: [
+        {
+          key: "/service-transport-dashboard",
+          icon: <DashboardOutlined />,
+          label: "Dashboard บริการ/ขนส่ง",
+        },
+        {
+          key: "/service-transport",
+          icon: <FileSearchOutlined />,
+          label: transportListLabel,
+          pageTitle: "รายการ Complaint บริการ/ขนส่ง",
+        },
+        {
+          key: "/service-transport-form",
+          icon: <CarOutlined />,
+          label: "ฟอร์ม บริการ/ขนส่ง",
+        },
+      ],
+    },
+    {
       key: "system",
       label: "ระบบ",
       children: systemChildren,
@@ -85,6 +113,8 @@ function buildNavGroups(user, complaintInboxCount = 0) {
 const SIDEBAR_EXPANDED = 248;
 const SIDEBAR_COLLAPSED = 76;
 const SIDEBAR_STORAGE_KEY = "cms.sidebar.collapsed";
+const SIDEBAR_OPEN_KEYS_STORAGE = "cms.sidebar.openKeys";
+const DEFAULT_OPEN_KEYS = ["reject", "complaint", "service-transport", "system"];
 
 function SidebarContent({
   selectedKey,
@@ -94,6 +124,8 @@ function SidebarContent({
   collapsed = false,
   onToggleCollapse,
   navGroups,
+  openKeys,
+  onOpenChange,
 }) {
   const displayName = user?.display_name || user?.username || "?";
   return (
@@ -130,10 +162,11 @@ function SidebarContent({
           mode="inline"
           inlineCollapsed={collapsed}
           selectedKeys={[selectedKey]}
+          openKeys={collapsed ? [] : openKeys}
+          onOpenChange={onOpenChange}
           className="border-none !bg-transparent"
           style={{ borderInlineEnd: "none" }}
           items={(navGroups || []).map((group) => ({
-            type: "group",
             key: group.key,
             label: group.label,
             children: group.children.map((item) => ({
@@ -223,6 +256,7 @@ export function AppLayout() {
   const { user, logout } = useSession();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [complaintInboxCount, setComplaintInboxCount] = useState(0);
+  const [transportInboxCount, setTransportInboxCount] = useState(0);
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return localStorage.getItem(SIDEBAR_STORAGE_KEY) === "1";
@@ -230,11 +264,25 @@ export function AppLayout() {
       return false;
     }
   });
+  const [openKeys, setOpenKeys] = useState(() => {
+    try {
+      const raw = localStorage.getItem(SIDEBAR_OPEN_KEYS_STORAGE);
+      if (!raw) return DEFAULT_OPEN_KEYS;
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) && parsed.length ? parsed : DEFAULT_OPEN_KEYS;
+    } catch {
+      return DEFAULT_OPEN_KEYS;
+    }
+  });
 
   const refreshComplaintInboxCount = useCallback(async () => {
     try {
-      const result = await complaintApi.inboxCount();
-      setComplaintInboxCount(Number(result?.total || 0));
+      const [productResult, transportResult] = await Promise.all([
+        complaintApi.inboxCount({ kind: "product" }),
+        complaintApi.inboxCount({ kind: "service_transport" }),
+      ]);
+      setComplaintInboxCount(Number(productResult?.total || 0));
+      setTransportInboxCount(Number(transportResult?.total || 0));
     } catch {
       // keep last known count if refresh fails
     }
@@ -247,6 +295,14 @@ export function AppLayout() {
       // ignore storage errors
     }
   }, [collapsed]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_OPEN_KEYS_STORAGE, JSON.stringify(openKeys));
+    } catch {
+      // ignore storage errors
+    }
+  }, [openKeys]);
 
   useEffect(() => {
     refreshComplaintInboxCount();
@@ -263,13 +319,24 @@ export function AppLayout() {
   const sidebarWidth = collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED;
 
   const navGroups = useMemo(
-    () => buildNavGroups(user, complaintInboxCount),
-    [user, complaintInboxCount],
+    () => buildNavGroups(user, complaintInboxCount, transportInboxCount),
+    [user, complaintInboxCount, transportInboxCount],
   );
   const navItems = useMemo(
     () => navGroups.flatMap((group) => group.children),
     [navGroups],
   );
+
+  // Auto-expand the group that contains the current route
+  useEffect(() => {
+    const activeGroup = navGroups.find((group) =>
+      group.children.some((item) => item.key === location.pathname),
+    );
+    if (!activeGroup) return;
+    setOpenKeys((prev) =>
+      prev.includes(activeGroup.key) ? prev : [...prev, activeGroup.key],
+    );
+  }, [location.pathname, navGroups]);
 
   const title = useMemo(() => {
     if (location.pathname === "/profile") return "ข้อมูลของฉัน";
@@ -322,6 +389,8 @@ export function AppLayout() {
           collapsed={collapsed}
           onToggleCollapse={toggleCollapsed}
           navGroups={navGroups}
+          openKeys={openKeys}
+          onOpenChange={setOpenKeys}
         />
       </aside>
 
@@ -339,6 +408,8 @@ export function AppLayout() {
           onLogout={onLogout}
           user={user}
           navGroups={navGroups}
+          openKeys={openKeys}
+          onOpenChange={setOpenKeys}
         />
       </Drawer>
 

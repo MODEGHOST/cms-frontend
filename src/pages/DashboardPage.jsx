@@ -54,7 +54,6 @@ import {
   LazyMount,
   PIE_COLORS,
   Panel,
-  SectionJumpFab,
   SectionJumpNav,
   SectionTitle,
   VerticalRankChart,
@@ -890,7 +889,6 @@ export function DashboardPage() {
   const [jobTypes, setJobTypes] = useState([]);
   const [trendStack, setTrendStack] = useState("machine");
   const [filterOpen, setFilterOpen] = useState(false);
-  const [filterCompact, setFilterCompact] = useState(false);
   const [loading, setLoading] = useState(true);
   const [trendLoading, setTrendLoading] = useState(false);
   const [error, setError] = useState("");
@@ -921,15 +919,6 @@ export function DashboardPage() {
     shifts.length +
     jobTypes.length +
     (period === "custom" ? 1 : 0);
-
-  useEffect(() => {
-    const onScroll = () => {
-      setFilterCompact(window.scrollY > 180);
-    };
-    onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
 
   const queryParams = useMemo(
     () => ({
@@ -1339,60 +1328,40 @@ export function DashboardPage() {
         </div>
       </Card>
 
-      {!filterCompact ? (
-        <div className="sticky top-16 z-20 -mx-1 rounded-xl border border-slate-200 bg-white/95 p-2.5 shadow-md backdrop-blur">
-          <div className="flex items-center justify-between gap-3">
-            <div className="hidden min-w-0 md:block">
-              <div className="text-xs font-semibold text-slate-700">ตัวกรอง Dashboard</div>
-              {filterSummary ? (
-                <div className="truncate text-[11px] font-medium text-slate-600">{filterSummary}</div>
-              ) : null}
-            </div>
-            <div className="min-w-0 flex-1 overflow-x-auto md:flex-none">
-              <div className="flex w-max items-center gap-2 md:ml-auto">
-                <Radio.Group
+      <div className="sticky top-16 z-20 -mx-1 rounded-xl border border-slate-200 bg-white/95 p-2.5 shadow-md backdrop-blur">
+        <div className="flex items-center justify-between gap-3">
+          <div className="hidden min-w-0 md:block">
+            <div className="text-xs font-semibold text-slate-700">ตัวกรอง Dashboard</div>
+            {filterSummary ? (
+              <div className="truncate text-[11px] font-medium text-slate-600">{filterSummary}</div>
+            ) : null}
+          </div>
+          <div className="min-w-0 flex-1 overflow-x-auto md:flex-none">
+            <div className="flex w-max items-center gap-2 md:ml-auto">
+              <Radio.Group
+                size="small"
+                optionType="button"
+                buttonStyle="solid"
+                value={period === "custom" ? undefined : period}
+                options={PERIODS}
+                onChange={(e) => handleQuickPeriod(e.target.value)}
+              />
+              <Badge count={activeFilterCount} size="small" offset={[-2, 2]}>
+                <Button
                   size="small"
-                  optionType="button"
-                  buttonStyle="solid"
-                  value={period === "custom" ? undefined : period}
-                  options={PERIODS}
-                  onChange={(e) => handleQuickPeriod(e.target.value)}
-                />
-                <Badge count={activeFilterCount} size="small" offset={[-2, 2]}>
-                  <Button
-                    size="small"
-                    icon={<FilterOutlined />}
-                    onClick={() => setFilterOpen(true)}
-                  >
-                    ตัวกรอง
-                  </Button>
-                </Badge>
-              </div>
+                  icon={<FilterOutlined />}
+                  onClick={() => setFilterOpen(true)}
+                >
+                  ตัวกรอง
+                </Button>
+              </Badge>
             </div>
           </div>
-          <div className="mt-2 border-t border-slate-100 pt-2">
-            <SectionJumpNav items={SECTION_JUMPS} />
-          </div>
         </div>
-      ) : (
-        <div className="pointer-events-none fixed right-4 bottom-5 z-30 flex flex-col items-end gap-2 sm:right-6 sm:bottom-6">
-          <div className="pointer-events-auto">
-            <SectionJumpFab items={SECTION_JUMPS} />
-          </div>
-          <Badge count={activeFilterCount} size="small" offset={[-4, 4]}>
-            <Button
-              type="primary"
-              size="large"
-              icon={<FilterOutlined />}
-              className="pointer-events-auto !h-12 !rounded-full !px-4 !shadow-lg"
-              onClick={() => setFilterOpen(true)}
-              title={filterSummary || "เปิดตัวกรอง"}
-            >
-              ตัวกรอง
-            </Button>
-          </Badge>
+        <div className="mt-2 border-t border-slate-100 pt-2">
+          <SectionJumpNav items={SECTION_JUMPS} />
         </div>
-      )}
+      </div>
 
       <DashboardFilterModal
         open={filterOpen}

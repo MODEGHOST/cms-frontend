@@ -57,16 +57,39 @@ button,
 .app-sidebar .ant-menu-dark .ant-menu-item-group-title {
   padding: 8px 12px 6px !important;
   color: #64748b !important;
-  font-size: 11px !important;
+  font-size: 10px !important;
   font-weight: 700 !important;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
+.app-sidebar .ant-menu-dark.ant-menu-inline,
+.app-sidebar .ant-menu-dark .ant-menu-sub.ant-menu-inline {
+  font-size: 12px !important;
+}
+
+.app-sidebar .ant-menu-dark .ant-menu-submenu-title {
+  color: #e2e8f0 !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  height: 36px !important;
+  line-height: 36px !important;
+  margin-inline: 0 !important;
+  border-radius: 10px !important;
+}
+
 .app-sidebar .ant-menu-dark .ant-menu-item {
   color: #cbd5e1 !important;
+  font-size: 12px !important;
+  height: 34px !important;
+  line-height: 34px !important;
   border-radius: 10px !important;
   margin-inline: 0 !important;
+}
+
+.app-sidebar .ant-menu-dark .ant-menu-item .anticon,
+.app-sidebar .ant-menu-dark .ant-menu-submenu-title .anticon {
+  font-size: 13px !important;
 }
 
 .app-sidebar .ant-menu-dark .ant-menu-item:hover {

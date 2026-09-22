@@ -196,8 +196,8 @@ function calcPostClaimDisplay(record) {
 
 /**
  * Keep post-claim qty/weight/amount in sync with claim data.
- * claim_sheet_qty = destroy_bl_qty + return_to_customer_qty
- * destroy/return ห้ามเกินจำนวนเคลม
+ * claim_sheet_qty = sort_claim_sup_qty + destroy_bl_qty + return_to_customer_qty
+ * SUP / destroy / return ห้ามเกินจำนวนเคลม และผลรวมต้องเท่ากับเคลม
  */
 function calcPostClaimFromClaim(record, allValues, changed) {
   const weightPerSheet = toNum(record?.weight_per_sheet);
@@ -205,45 +205,73 @@ function calcPostClaimFromClaim(record, allValues, changed) {
   let claimQty = toNum(allValues.claim_sheet_qty);
   let destroyQty = toNum(allValues.destroy_bl_qty);
   let returnQty = toNum(allValues.return_to_customer_qty);
+  let supQty = toNum(allValues.sort_claim_sup_qty);
   const updates = {};
 
-  const clampToClaim = (qty) => {
+  const n0 = (qty) => (qty == null ? 0 : qty);
+
+  /** Clamp qty to remaining claim after reserved (fields that stay fixed). */
+  const clampToRemaining = (qty, reserved) => {
     if (qty == null) return null;
     let next = Math.max(0, qty);
-    if (claimQty != null) next = Math.min(next, claimQty);
+    if (claimQty != null) {
+      next = Math.min(next, Math.max(0, claimQty - n0(reserved)));
+    }
     return next;
   };
 
   if (changed === "destroy_bl_qty") {
     if (destroyQty != null) {
-      const clamped = clampToClaim(destroyQty);
+      // return จะถูกคำนวณใหม่ — จองเฉพาะ SUP
+      const clamped = clampToRemaining(destroyQty, supQty);
       if (clamped !== destroyQty) {
         destroyQty = clamped;
         updates.destroy_bl_qty = destroyQty;
       }
       if (claimQty != null) {
-        returnQty = Math.max(0, claimQty - destroyQty);
+        returnQty = Math.max(0, claimQty - n0(destroyQty) - n0(supQty));
         updates.return_to_customer_qty = returnQty;
       }
     }
   } else if (changed === "return_to_customer_qty") {
     if (returnQty != null) {
-      const clamped = clampToClaim(returnQty);
+      // destroy จะถูกคำนวณใหม่ — จองเฉพาะ SUP
+      const clamped = clampToRemaining(returnQty, supQty);
       if (clamped !== returnQty) {
         returnQty = clamped;
         updates.return_to_customer_qty = returnQty;
       }
       if (claimQty != null) {
-        destroyQty = Math.max(0, claimQty - returnQty);
+        destroyQty = Math.max(0, claimQty - n0(returnQty) - n0(supQty));
         updates.destroy_bl_qty = destroyQty;
+      }
+    }
+  } else if (changed === "sort_claim_sup_qty") {
+    if (supQty != null) {
+      // return จะถูกคำนวณใหม่ — จองเฉพาะทำลาย BL
+      const clamped = clampToRemaining(supQty, destroyQty);
+      if (clamped !== supQty) {
+        supQty = clamped;
+        updates.sort_claim_sup_qty = supQty;
+      }
+      if (claimQty != null) {
+        returnQty = Math.max(0, claimQty - n0(destroyQty) - n0(supQty));
+        updates.return_to_customer_qty = returnQty;
       }
     }
   } else if (changed === "claim_sheet_qty") {
     Object.assign(updates, calcClaimTotals(record, claimQty));
-    if (claimQty != null && destroyQty != null) {
-      destroyQty = clampToClaim(destroyQty);
-      updates.destroy_bl_qty = destroyQty;
-      returnQty = Math.max(0, claimQty - destroyQty);
+    if (claimQty != null && (destroyQty != null || supQty != null)) {
+      if (destroyQty != null) {
+        destroyQty = Math.min(Math.max(0, destroyQty), claimQty);
+        updates.destroy_bl_qty = destroyQty;
+      }
+      if (supQty != null) {
+        const maxSup = Math.max(0, claimQty - n0(destroyQty));
+        supQty = Math.min(Math.max(0, supQty), maxSup);
+        updates.sort_claim_sup_qty = supQty;
+      }
+      returnQty = Math.max(0, claimQty - n0(destroyQty) - n0(supQty));
       updates.return_to_customer_qty = returnQty;
     }
   }
@@ -292,6 +320,7 @@ function toFormValues(record) {
     } else if (
       [
         "claim_sheet_qty",
+        "sort_claim_sup_qty",
         "return_to_customer_qty",
         "return_amount",
         "return_kg",
@@ -444,7 +473,9 @@ function FormField({
   const claimSheetQty = Form.useWatch("claim_sheet_qty");
   const claimQty = toNum(claimSheetQty);
   const isClaimCappedQty =
-    name === "destroy_bl_qty" || name === "return_to_customer_qty";
+    name === "destroy_bl_qty" ||
+    name === "return_to_customer_qty" ||
+    name === "sort_claim_sup_qty";
   const isDecimalField = type === "decimal2";
   const isNumericField = type === "number" || type === "decimal2";
 
@@ -853,6 +884,7 @@ export function RejectForm({ record, onSaved, onReturned }) {
     if (
       ![
         "claim_sheet_qty",
+        "sort_claim_sup_qty",
         "destroy_bl_qty",
         "return_to_customer_qty",
       ].includes(changed)
@@ -864,7 +896,9 @@ export function RejectForm({ record, onSaved, onReturned }) {
     if (
       claimQty != null &&
       entered != null &&
-      (changed === "destroy_bl_qty" || changed === "return_to_customer_qty") &&
+      (changed === "destroy_bl_qty" ||
+        changed === "return_to_customer_qty" ||
+        changed === "sort_claim_sup_qty") &&
       entered > claimQty
     ) {
       message.warning(

@@ -282,13 +282,25 @@ export const erpApi = {
 export const complaintApi = {
   inbox: (params) =>
     api.get("/api/complaints/inbox", { params }).then((res) => res.data),
-  inboxCount: () =>
-    api.get("/api/complaints/inbox/count").then((res) => res.data),
+  inboxCount: (params) =>
+    api.get("/api/complaints/inbox/count", { params }).then((res) => res.data),
+  getById: (id) =>
+    api.get(`/api/complaints/${id}`).then((res) => res.data),
   searchByPdr: (pdrNo) =>
     api.get("/api/complaints", { params: { pdr_no: pdrNo } }).then((res) => res.data),
   /** INSERT Complaint จากข้อมูลฟอร์มหลัง Search — ไม่เรียก ERP ซ้ำ */
   createFromDraft: (payload) =>
     api.post("/api/complaints/from-draft", payload).then((res) => res.data),
+  createServiceTransport: (payload) =>
+    api.post("/api/complaints/service-transport", payload).then((res) => res.data),
+  lookupCustomerCare: (companyName) =>
+    api
+      .get("/api/customer-care/lookup", { params: { company_name: companyName } })
+      .then((res) => res.data),
+  serviceTransportSummary: (params) =>
+    api
+      .get("/api/complaints/service-transport/summary", { params })
+      .then((res) => res.data),
   /** INSERT โดย GET ERP ใหม่ (fallback) */
   fromErp: (pdrNo) =>
     api.post("/api/complaints/from-erp", { pdr_no: pdrNo }).then((res) => res.data),

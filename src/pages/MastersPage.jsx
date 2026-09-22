@@ -10,7 +10,8 @@ const TABS = [
   { key: "customer-aliases", label: "ชื่อเล่น", hasCompany: true },
   { key: "departments", label: "แผนก", hasCompany: false },
   { key: "machines", label: "เครื่องจักร", hasCompany: false },
-  { key: "problems", label: "ปัญหา", hasCompany: false },
+  { key: "problems", label: "ปัญหา (สินค้า)", hasCompany: false },
+  { key: "transport-problems", label: "ปัญหา (ขนส่ง)", hasCompany: false },
   { key: "shifts", label: "กะ", hasCompany: false },
 ];
 

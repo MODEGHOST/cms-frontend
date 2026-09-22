@@ -53,6 +53,13 @@ import {
   canShowActionPlanDocument,
 } from "./ActionPlanDocument";
 import { ProblemMismatchAlert, ProblemFormItem, ProblemChips } from "./ProblemField";
+import {
+  CUSTOMER_GROUP_OPTIONS,
+  DEFAULT_AGENCY,
+  DEFAULT_CHANNEL,
+  ISSUE_TYPE_OPTIONS,
+  SUP_CAR_OPTIONS,
+} from "../../constants/serviceTransport";
 
 const STEP_ITEMS_FULL = [
   { title: "CS", description: "ขั้นตอนที่ 1" },
@@ -266,6 +273,56 @@ const SECTIONS = [
       ["grade", "Grade", "select", "source"],
       ["document_accepted", "เอกสาร Action plan", "select", "cs"],
       ["document_scope", "เอกสารภายใน/ภายนอก", "select", "qa"],
+      ["document_no", "เลขที่เอกสาร", "text", "qa"],
+      ["doc_forward_date", "วันที่ส่งต่อเอกสาร", "date", "department"],
+      ["doc_receiver", "ผู้รับเอกสาร", "text", "department"],
+      ["doc_reply_date", "วันที่รับเอกสารตอบกลับ", "date", "department"],
+      ["doc_cs_sale_date", "วันที่ส่งเอกสาร CS&Sale", "date", "department"],
+      ["lead_time_days", "Lead time (วัน)", "number", "department"],
+    ],
+  },
+  {
+    key: "action",
+    title: "การวิเคราะห์และการดำเนินการ",
+    fields: [
+      ["completed_date", "วันที่แก้ไขแล้วเสร็จ", "date", "department"],
+      ["cause", "สาเหตุ", "textarea", "department"],
+      ["correction", "แก้ไข", "textarea", "department"],
+      ["prevention", "ป้องกัน", "textarea", "department"],
+      ["remark", "หมายเหตุ", "textarea", "department"],
+    ],
+  },
+];
+
+const SERVICE_TRANSPORT_SECTIONS = [
+  {
+    key: "transport",
+    title: "ข้อมูล Complaint บริการ/ขนส่ง",
+    fields: [
+      ["document_scope", "ร้องเรียนภายใน/ภายนอก", "select", "cs"],
+      ["company_name", "ชื่อลูกค้า", "select", "cs"],
+      ["sale_cs_staff", "เจ้าหน้าที่ Sale/CS", "text", "source"],
+      ["grade", "Grade", "text", "source"],
+      ["license_plate", "ทะเบียนรถ", "text", "cs"],
+      ["subject", "เรื่องที่ complaint", "textarea", "cs"],
+      ["received_date", "วันที่ complaint", "date", "cs"],
+      ["document_accepted", "เอกสาร Action plan", "select", "cs"],
+      ["quarter", "ไตรมาส", "text", "qa"],
+      ["week_no", "week", "number", "qa"],
+      ["month_no", "เดือน", "number", "qa"],
+      ["customer_group", "Group", "select", "qa"],
+      ["team", "Team", "text", "qa"],
+      ["channel", "channel", "text", "qa"],
+      ["agency", "หน่วยงาน", "text", "qa"],
+      ["issue_type", "ประเภท", "select", "qa"],
+      ["transport_problem", "ปัญหา", "select", "qa"],
+      ["qa_cause", "สาเหตุ", "textarea", "qa"],
+      ["occurrence_no", "ครั้งที่", "number", "qa"],
+      ["sup_car", "SUP CAR", "select", "qa"],
+      ["lts_ack_date", "LTS รับทราบ", "date", "qa"],
+      ["qa_accepted_by_name", "ผู้บันทึก", "text", "qa"],
+      ["reported_by_department_name", "หน่วยงานที่แจ้งปัญหา", "select", "qa"],
+      ["responsible_department_name", "หน่วยงานที่รับผิดชอบ", "select", "qa"],
       ["document_no", "เลขที่เอกสาร", "text", "qa"],
       ["doc_forward_date", "วันที่ส่งต่อเอกสาร", "date", "department"],
       ["doc_receiver", "ผู้รับเอกสาร", "text", "department"],
@@ -1319,7 +1376,11 @@ function buildAttachmentFormData(data, fileList, existingAttachments = []) {
 
 function formValues(record) {
   const values = {};
-  for (const section of SECTIONS) {
+  const sections =
+    record?.complaint_kind === "service_transport"
+      ? SERVICE_TRANSPORT_SECTIONS
+      : SECTIONS;
+  for (const section of sections) {
     for (const [name, , type] of section.fields) {
       if (Object.prototype.hasOwnProperty.call(values, name)) continue;
       const value = record?.[name];
@@ -1370,9 +1431,13 @@ function ReadOnlyField({ field, record, highlighted }) {
   );
 }
 
-export function ComplaintForm({ record, onSaved }) {
+export function ComplaintForm({ record, onSaved, kind: kindProp }) {
   const { message, modal } = App.useApp();
   const { user } = useSession();
+  const isServiceTransport =
+    kindProp === "service_transport" ||
+    record?.complaint_kind === "service_transport";
+  const formSections = isServiceTransport ? SERVICE_TRANSPORT_SECTIONS : SECTIONS;
   const [form] = Form.useForm();
   const [csForm] = Form.useForm();
   const [qaForm] = Form.useForm();
@@ -1401,15 +1466,19 @@ export function ComplaintForm({ record, onSaved }) {
   const [qaConfirmFileList, setQaConfirmFileList] = useState([]);
   const [qaConfirmNewFileSlots, setQaConfirmNewFileSlots] = useState({});
   const [relatedReject, setRelatedReject] = useState(record?.related_reject || null);
+  const [csCareHint, setCsCareHint] = useState(null);
+  const [csCareLoading, setCsCareLoading] = useState(false);
   const qaDocumentAccepted = Form.useWatch("document_accepted", qaForm);
   const qaProblemWatch = Form.useWatch("problem_name", qaForm);
   const qaCsProblemWatch = Form.useWatch("problem_name", qaCsForm);
 
   const status = record?.workflow_status || "cs_draft";
-  const isErpDraft = Boolean(record?._fromErp) || record?.id == null;
+  const isErpDraft =
+    !isServiceTransport && (Boolean(record?._fromErp) || record?.id == null);
   const activeGroup = GROUP_BY_STATUS[status];
   // ERP draft: CS กรอก/ส่งได้ — บันทึกเข้า CMS ตอนกดส่ง
-  const csEditable = canCsEdit(status, user);
+  const csEditable =
+    canCsEdit(status, user) || (isServiceTransport && record?.id == null);
   const qaEditable = !isErpDraft && canQaEdit(status, user);
   const departmentEditable = !isErpDraft && canDepartmentEdit(status, user, record);
   const permitted =
@@ -1425,6 +1494,7 @@ export function ComplaintForm({ record, onSaved }) {
   const canQaEditCapa =
     documentAcceptedP && (isQaUser(user) || isCmsAdmin(user));
   const qaCanEditProblems =
+    !isServiceTransport &&
     !isErpDraft &&
     Boolean(record?.id) &&
     status !== "completed" &&
@@ -1501,6 +1571,8 @@ export function ComplaintForm({ record, onSaved }) {
         flute_name: rowsToOptions(result.flutes),
         machine_name: rowsToOptions(result.machines),
         problem_name: rowsToOptions(result.problems),
+        company_name: rowsToOptions(result.companies),
+        transport_problem: rowsToOptions(result.transport_problems),
         reported_by_department_name: rowsToOptions(result.departments),
         responsible_department_name: rowsToOptions(result.departments).filter((item) =>
           canHandleDepartmentStep(item.value),
@@ -1509,6 +1581,9 @@ export function ComplaintForm({ record, onSaved }) {
         grade: ["A", "B", "C", "D", "NEW", "X"].map((value) => ({ value, label: value })),
         document_accepted: DOCUMENT_ACCEPTED_OPTIONS,
         document_scope: ["ภายใน", "ภายนอก"].map((value) => ({ value, label: value })),
+        customer_group: CUSTOMER_GROUP_OPTIONS,
+        issue_type: ISSUE_TYPE_OPTIONS,
+        sup_car: SUP_CAR_OPTIONS,
       });
     }).catch(() => {});
   }, []);
@@ -1540,7 +1615,7 @@ export function ComplaintForm({ record, onSaved }) {
 
   const mergedOptions = useMemo(() => {
     const result = { ...options };
-    for (const section of SECTIONS) {
+    for (const section of formSections) {
       for (const [name, , type] of section.fields) {
         if (type !== "select") continue;
         if (name === "problem_name") {
@@ -1575,7 +1650,7 @@ export function ComplaintForm({ record, onSaved }) {
       }
     }
     return result;
-  }, [options, record]);
+  }, [options, record, formSections]);
 
   if (!record) return null;
 
@@ -1670,22 +1745,79 @@ export function ComplaintForm({ record, onSaved }) {
     }
   };
 
+  const applyCustomerCare = async (companyName) => {
+    const name = String(companyName || "").trim();
+    if (!name) {
+      csForm.setFieldsValue({ sale_cs_staff: "", grade: "" });
+      setCsCareHint(null);
+      return;
+    }
+    setCsCareLoading(true);
+    try {
+      const result = await complaintApi.lookupCustomerCare(name);
+      const care = result?.data;
+      if (care) {
+        csForm.setFieldsValue({
+          sale_cs_staff: care.sale_cs_staff || "",
+          grade: care.grade || "",
+        });
+        setCsCareHint(
+          care.customer_name
+            ? `จับคู่ customer_care: ${care.customer_name}`
+            : "ดึง Sale/CS จาก customer_care แล้ว",
+        );
+      } else {
+        csForm.setFieldsValue({ sale_cs_staff: "", grade: "" });
+        setCsCareHint(
+          result?.status?.configured === false
+            ? "ยังไม่ได้ตั้งค่า CUSTOMER_CARE_* บนเซิร์ฟเวอร์ — บันทึกลูกค้าได้ แต่ยังไม่มี Sale/CS"
+            : "ไม่พบ Sale/CS ใน customer_care สำหรับลูกค้ารายนี้",
+        );
+      }
+    } catch {
+      csForm.setFieldsValue({ sale_cs_staff: "", grade: "" });
+      setCsCareHint("ดึง Sale/CS ไม่สำเร็จ — บันทึกลูกค้าได้ตามปกติ");
+    } finally {
+      setCsCareLoading(false);
+    }
+  };
+
   const openCsModal = () => {
-    csForm.setFieldsValue({
-      problem_name: problemNamesOf(record),
-      ng_qty: record.ng_qty == null ? null : Number(record.ng_qty),
-      cs_remark: record.cs_remark || "",
-      received_date: record.received_date ? dayjs(record.received_date) : dayjs(),
-      document_accepted: record.document_accepted || null,
-      repair_flag: record.repair_flag || "no_repair",
-    });
+    if (isServiceTransport) {
+      csForm.setFieldsValue({
+        company_name: record.company_name || undefined,
+        sale_cs_staff: record.sale_cs_staff || "",
+        grade: record.grade || "",
+        license_plate: record.license_plate || "",
+        subject: record.subject || "",
+        received_date: record.received_date ? dayjs(record.received_date) : dayjs(),
+        document_accepted: record.document_accepted || null,
+      });
+      setCsCareHint(
+        record.sale_cs_staff
+          ? null
+          : record.company_name
+            ? "ยังไม่มี Sale/CS จาก customer_care"
+            : null,
+      );
+    } else {
+      csForm.setFieldsValue({
+        problem_name: problemNamesOf(record),
+        ng_qty: record.ng_qty == null ? null : Number(record.ng_qty),
+        cs_remark: record.cs_remark || "",
+        received_date: record.received_date ? dayjs(record.received_date) : dayjs(),
+        document_accepted: record.document_accepted || null,
+        repair_flag: record.repair_flag || "no_repair",
+      });
+      setCsCareHint(null);
+    }
     setFileList(toUploadFileList(splitAttachments(record.attachments || []).files));
     setCsModalOpen(true);
   };
 
   const handleCsOk = async () => {
     const values = await csForm.validateFields();
-    if ((values.repair_flag || "no_repair") !== "repair") {
+    if (isServiceTransport || (values.repair_flag || "no_repair") !== "repair") {
       await submitCs(values);
       return;
     }
@@ -1716,18 +1848,29 @@ export function ComplaintForm({ record, onSaved }) {
   const submitCs = async (values) => {
     try {
       const data = new FormData();
-      appendProblemNames(data, values.problem_name);
-      data.append(
-        "ng_qty",
-        values.ng_qty == null || values.ng_qty === "" ? "" : String(values.ng_qty),
-      );
-      data.append("cs_remark", values.cs_remark || "");
+      if (isServiceTransport) {
+        data.append("license_plate", values.license_plate || "");
+        data.append("subject", values.subject || "");
+        data.append("company_name", values.company_name || "");
+        data.append("sale_cs_staff", values.sale_cs_staff || "");
+        data.append("grade", values.grade || "");
+      } else {
+        appendProblemNames(data, values.problem_name);
+        data.append(
+          "ng_qty",
+          values.ng_qty == null || values.ng_qty === "" ? "" : String(values.ng_qty),
+        );
+        data.append("cs_remark", values.cs_remark || "");
+      }
       data.append(
         "received_date",
         values.received_date ? values.received_date.format("YYYY-MM-DD") : "",
       );
       data.append("document_accepted", values.document_accepted || "");
-      data.append("repair_flag", values.repair_flag || "no_repair");
+      data.append(
+        "repair_flag",
+        isServiceTransport ? "no_repair" : values.repair_flag || "no_repair",
+      );
       data.append("action", "submit");
       buildAttachmentFormData(
         data,
@@ -1737,45 +1880,64 @@ export function ComplaintForm({ record, onSaved }) {
       setSaving(true);
       let recordId = record.id;
       if (!recordId) {
-        // ใช้ข้อมูลในฟอร์มที่ Search ดึงมาแล้ว — ไม่ GET ERP ซ้ำ
-        const created = await complaintApi.createFromDraft({
-          pdr_no: record.pdr_no,
-          order_no: record.order_no,
-          company_name: record.company_name,
-          customer_alias_name: record.customer_alias_name,
-          flute_name: record.flute_name,
-          machine_name: record.machine_name,
-          product_name: record.product_name,
-          paper_m5: record.paper_m5,
-          paper_m4: record.paper_m4,
-          paper_m3: record.paper_m3,
-          paper_m2: record.paper_m2,
-          paper_m1: record.paper_m1,
-          plan_no: record.plan_no,
-          shift: record.shift,
-          delivery_date: record.delivery_date,
-          customer_ship_date: record.customer_ship_date,
-          production_date: record.production_date,
-          demand_qty: record.demand_qty,
-          grade: record.grade,
-          sale_cs_staff: record.sale_cs_staff,
-        });
-        const createdRow = created?.data?.[0];
-        if (!createdRow?.id) {
-          throw new Error("สร้าง Complaint จากข้อมูลฟอร์มไม่สำเร็จ");
+        if (isServiceTransport) {
+          const created = await complaintApi.createServiceTransport({
+            license_plate: values.license_plate || "",
+            subject: values.subject || "",
+            document_scope: record.document_scope || values.document_scope || "",
+            received_date: values.received_date
+              ? values.received_date.format("YYYY-MM-DD")
+              : null,
+            company_name: values.company_name || "",
+            sale_cs_staff: values.sale_cs_staff || "",
+            grade: values.grade || "",
+          });
+          const createdRow = created?.data?.[0];
+          if (!createdRow?.id) {
+            throw new Error("สร้าง Complaint บริการ/ขนส่งไม่สำเร็จ");
+          }
+          recordId = createdRow.id;
+        } else {
+          // ใช้ข้อมูลในฟอร์มที่ Search ดึงมาแล้ว — ไม่ GET ERP ซ้ำ
+          const created = await complaintApi.createFromDraft({
+            pdr_no: record.pdr_no,
+            order_no: record.order_no,
+            company_name: record.company_name,
+            customer_alias_name: record.customer_alias_name,
+            flute_name: record.flute_name,
+            machine_name: record.machine_name,
+            product_name: record.product_name,
+            paper_m5: record.paper_m5,
+            paper_m4: record.paper_m4,
+            paper_m3: record.paper_m3,
+            paper_m2: record.paper_m2,
+            paper_m1: record.paper_m1,
+            plan_no: record.plan_no,
+            shift: record.shift,
+            delivery_date: record.delivery_date,
+            customer_ship_date: record.customer_ship_date,
+            production_date: record.production_date,
+            demand_qty: record.demand_qty,
+            grade: record.grade,
+            sale_cs_staff: record.sale_cs_staff,
+          });
+          const createdRow = created?.data?.[0];
+          if (!createdRow?.id) {
+            throw new Error("สร้าง Complaint จากข้อมูลฟอร์มไม่สำเร็จ");
+          }
+          recordId = createdRow.id;
         }
-        recordId = createdRow.id;
       }
       const result = await complaintApi.submitCs(recordId, data);
-      if (result?.reject?.error) {
+      if (!isServiceTransport && result?.reject?.error) {
         message.warning(
           `บันทึกข้อมูล CS แล้ว แต่สร้าง Reject ไม่สำเร็จ: ${result.reject.error}`,
         );
-      } else if (result?.reject?.created) {
+      } else if (!isServiceTransport && result?.reject?.created) {
         message.success(
           "บันทึกข้อมูล CS แล้ว — ส่งรอ QA และส่งรายการ Reject ให้ QC แล้ว",
         );
-      } else if (result?.reject && !result.reject.created) {
+      } else if (!isServiceTransport && result?.reject && !result.reject.created) {
         message.success(
           status === "pending_qa"
             ? "อัปเดตข้อมูล CS แล้ว (มีรายการ Reject จาก Complaint นี้อยู่แล้ว)"
@@ -1840,14 +2002,42 @@ export function ComplaintForm({ record, onSaved }) {
       record,
       mergedOptions.reported_by_department_name,
     );
-    qaForm.setFieldsValue({
-      problem_name: problemNamesOf(record),
-      reported_by_department_name: defaultReportedBy,
-      responsible_department_name: record.responsible_department_name || null,
-      document_accepted: accepted,
-      document_scope: record.document_scope || null,
-      document_no: documentNo || null,
-    });
+    if (isServiceTransport) {
+      qaForm.setFieldsValue({
+        grade: record.grade || "",
+        quarter: record.quarter || "",
+        week_no: record.week_no ?? null,
+        month_no: record.month_no ?? null,
+        company_name: record.company_name || "",
+        customer_group: record.customer_group || undefined,
+        sale_cs_staff: record.sale_cs_staff || "",
+        team: record.team || "",
+        channel: record.channel || DEFAULT_CHANNEL,
+        agency: record.agency || DEFAULT_AGENCY,
+        issue_type: record.issue_type || undefined,
+        transport_problem: record.transport_problem || undefined,
+        qa_cause: record.qa_cause || "",
+        occurrence_no: record.occurrence_no ?? null,
+        license_plate: record.license_plate || "",
+        sup_car: record.sup_car || undefined,
+        lts_ack_date: record.lts_ack_date ? dayjs(record.lts_ack_date) : null,
+        qa_accepted_by_name: record.qa_accepted_by_name || "",
+        reported_by_department_name: defaultReportedBy,
+        responsible_department_name: record.responsible_department_name || null,
+        document_accepted: accepted,
+        document_scope: record.document_scope || null,
+        document_no: documentNo || null,
+      });
+    } else {
+      qaForm.setFieldsValue({
+        problem_name: problemNamesOf(record),
+        reported_by_department_name: defaultReportedBy,
+        responsible_department_name: record.responsible_department_name || null,
+        document_accepted: accepted,
+        document_scope: record.document_scope || null,
+        document_no: documentNo || null,
+      });
+    }
     setQaModalOpen(true);
   };
 
@@ -1862,20 +2052,51 @@ export function ComplaintForm({ record, onSaved }) {
         return;
       }
       setSaving(true);
-      const result = await complaintApi.update(record.id, {
-        action: "submit",
-        ...problemSaveFields(values.problem_name),
-        reported_by_department_name:
-          values.reported_by_department_name ||
-          defaultReportedByDepartmentName(
-            record,
-            mergedOptions.reported_by_department_name,
-          ),
-        responsible_department_name: values.responsible_department_name,
-        document_accepted: values.document_accepted,
-        document_scope: isP ? values.document_scope || null : null,
-        document_no: isP ? values.document_no || null : null,
-      });
+      const payload = isServiceTransport
+        ? {
+            action: "submit",
+            grade: values.grade || null,
+            quarter: values.quarter || null,
+            week_no: values.week_no ?? null,
+            month_no: values.month_no ?? null,
+            customer_group: values.customer_group || null,
+            team: values.team || null,
+            channel: values.channel || DEFAULT_CHANNEL,
+            agency: values.agency || DEFAULT_AGENCY,
+            issue_type: values.issue_type || null,
+            transport_problem: values.transport_problem || null,
+            qa_cause: values.qa_cause || null,
+            occurrence_no: values.occurrence_no ?? null,
+            sup_car: values.sup_car || null,
+            lts_ack_date: values.lts_ack_date
+              ? values.lts_ack_date.format("YYYY-MM-DD")
+              : null,
+            reported_by_department_name:
+              values.reported_by_department_name ||
+              defaultReportedByDepartmentName(
+                record,
+                mergedOptions.reported_by_department_name,
+              ),
+            responsible_department_name: values.responsible_department_name,
+            document_accepted: values.document_accepted,
+            document_scope: record.document_scope || values.document_scope || null,
+            document_no: isP ? values.document_no || null : null,
+          }
+        : {
+            action: "submit",
+            ...problemSaveFields(values.problem_name),
+            reported_by_department_name:
+              values.reported_by_department_name ||
+              defaultReportedByDepartmentName(
+                record,
+                mergedOptions.reported_by_department_name,
+              ),
+            responsible_department_name: values.responsible_department_name,
+            document_accepted: values.document_accepted,
+            document_scope: isP ? values.document_scope || null : null,
+            document_no: isP ? values.document_no || null : null,
+          };
+      const result = await complaintApi.update(record.id, payload);
       const nextIsDepartment = needsDepartmentStep(values.document_accepted);
       message.success(
         nextIsDepartment
@@ -2276,9 +2497,11 @@ export function ComplaintForm({ record, onSaved }) {
           ) : null}
           {status === "pending_qa" && isQaUser(user) ? (
             <>
-              <Button icon={<EditOutlined />} onClick={openQaCsModal}>
-                แก้ไขปัญหา / ข้อมูลที่ CS กรอก
-              </Button>
+              {!isServiceTransport ? (
+                <Button icon={<EditOutlined />} onClick={openQaCsModal}>
+                  แก้ไขปัญหา / ข้อมูลที่ CS กรอก
+                </Button>
+              ) : null}
               <Button
                 type="primary"
                 icon={<CheckCircleOutlined />}
@@ -2298,9 +2521,11 @@ export function ComplaintForm({ record, onSaved }) {
           ) : null}
           {qaEditable ? (
             <>
-              <Button icon={<EditOutlined />} onClick={openQaCsModal}>
-                แก้ไขข้อมูลที่ CS กรอก
-              </Button>
+              {!isServiceTransport ? (
+                <Button icon={<EditOutlined />} onClick={openQaCsModal}>
+                  แก้ไขข้อมูลที่ CS กรอก
+                </Button>
+              ) : null}
               <Button type="primary" icon={<EditOutlined />} onClick={openQaModal}>
                 {status === "pending_department" ? "แก้ไขข้อมูล QA" : "กรอกข้อมูล QA"}
               </Button>
@@ -2368,13 +2593,13 @@ export function ComplaintForm({ record, onSaved }) {
 
       <ProblemMismatchAlert
         complaint={record}
-        relatedReject={relatedReject}
+        relatedReject={isServiceTransport ? null : relatedReject}
         canEdit={qaCanEditProblems}
         onEdit={openQaCsModal}
       />
 
       <div className="space-y-4">
-        {SECTIONS.map((section) => {
+        {formSections.map((section) => {
           if (section.key === "action" && !documentAcceptedP) return null;
           const isActionSection = section.key === "action";
           return (
@@ -2411,7 +2636,7 @@ export function ComplaintForm({ record, onSaved }) {
                   );
                 })}
               </div>
-              {section.key === "quality" ? (
+              {section.key === "quality" || section.key === "transport" ? (
                 (() => {
                   const planSigIds = collectPlanSignatureIds(record.plan_form_json);
                   const split = splitAttachments(record.attachments || [], planSigIds);
@@ -2452,7 +2677,11 @@ export function ComplaintForm({ record, onSaved }) {
       </div>
 
       <Modal
-        title="กรอกข้อมูล Complaint · CS"
+        title={
+          isServiceTransport
+            ? "กรอกข้อมูล Complaint บริการ/ขนส่ง · CS"
+            : "กรอกข้อมูล Complaint · CS"
+        }
         open={csModalOpen}
         onCancel={() => !saving && setCsModalOpen(false)}
         okText={
@@ -2472,15 +2701,105 @@ export function ComplaintForm({ record, onSaved }) {
           className="!mb-3"
           type="info"
           showIcon
-          message={`PDR: ${record.pdr_no || "-"}`}
-          description="จำนวนของเสียว่างได้ถ้ายังรอสรุป — ใส่หมายเหตุ CS ไว้ให้ทีมถัดไปทราบ"
+          message={
+            isServiceTransport
+              ? `ประเภท: ${
+                  record.document_scope === "ภายนอก"
+                    ? "ร้องเรียนภายนอก"
+                    : record.document_scope === "ภายใน"
+                      ? "ร้องเรียนภายใน"
+                      : "ยังไม่ระบุ"
+                } · ทะเบียนรถ: ${record.license_plate || "ยังไม่ระบุ"}`
+              : `PDR: ${record.pdr_no || "-"}`
+          }
+          description={
+            isServiceTransport
+              ? "กรอกทะเบียนรถ เรื่องที่ complaint วันที่ และ Action plan แล้วส่งรอ QA (ประเภทภายใน/ภายนอกถูกกำหนดตอนสร้างรายการ)"
+              : "จำนวนของเสียว่างได้ถ้ายังรอสรุป — ใส่หมายเหตุ CS ไว้ให้ทีมถัดไปทราบ"
+          }
         />
         <Form
           form={csForm}
           layout="vertical"
           className="complaint-cs-modal-form"
-          initialValues={{ repair_flag: "no_repair" }}
+          initialValues={isServiceTransport ? undefined : { repair_flag: "no_repair" }}
         >
+              {isServiceTransport ? (
+                <>
+                  <Form.Item
+                    name="company_name"
+                    label="ชื่อลูกค้า"
+                    className="!mb-3"
+                    rules={[{ required: true, message: "กรุณาเลือกชื่อลูกค้า" }]}
+                    extra={csCareHint || "เลือกจาก Master แล้วระบบดึง Sale/CS จาก customer_care"}
+                  >
+                    <Select
+                      showSearch
+                      allowClear
+                      placeholder="ค้นหา / เลือกชื่อลูกค้า"
+                      options={mergedOptions.company_name || []}
+                      optionFilterProp="label"
+                      loading={csCareLoading}
+                      onChange={(value) => applyCustomerCare(value)}
+                    />
+                  </Form.Item>
+                  <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
+                    <Form.Item
+                      name="sale_cs_staff"
+                      label="เจ้าหน้าที่ Sale/CS"
+                      className="!mb-3"
+                    >
+                      <Input readOnly placeholder="เลือกลูกค้าแล้วจะเติมอัตโนมัติ" className="!bg-slate-50" />
+                    </Form.Item>
+                    <Form.Item name="grade" label="Grade" className="!mb-3">
+                      <Input readOnly placeholder="—" className="!bg-slate-50" />
+                    </Form.Item>
+                  </div>
+                  <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
+                    <Form.Item
+                      name="license_plate"
+                      label="ทะเบียนรถ"
+                      className="!mb-3"
+                      rules={[{ required: true, message: "กรุณากรอกทะเบียนรถ" }]}
+                    >
+                      <Input placeholder="เช่น กข 1234" />
+                    </Form.Item>
+                    <Form.Item
+                      name="received_date"
+                      label="วันที่ complaint"
+                      className="!mb-3"
+                      rules={[{ required: true, message: "กรุณาเลือกวันที่ complaint" }]}
+                    >
+                      <DatePicker className="w-full" format="DD/MM/YYYY" />
+                    </Form.Item>
+                  </div>
+                  <Form.Item
+                    name="subject"
+                    label="เรื่องที่ complaint"
+                    className="!mb-3"
+                    rules={[{ required: true, message: "กรุณากรอกเรื่องที่ complaint" }]}
+                  >
+                    <Input.TextArea
+                      autoSize={{ minRows: 3, maxRows: 6 }}
+                      placeholder="ระบุรายละเอียดเรื่องร้องเรียนด้านบริการ/ขนส่ง"
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    name="document_accepted"
+                    label="เอกสาร Action plan"
+                    className="!mb-4"
+                    rules={[{ required: true, message: "กรุณาเลือกรับหรือไม่รับเอกสาร" }]}
+                  >
+                    <Radio.Group
+                      optionType="button"
+                      buttonStyle="solid"
+                      className="cs-toggle-group"
+                      options={DOCUMENT_ACCEPTED_OPTIONS}
+                    />
+                  </Form.Item>
+                </>
+              ) : (
+                <>
               <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
                 <Form.Item
                   name="received_date"
@@ -2548,6 +2867,8 @@ export function ComplaintForm({ record, onSaved }) {
                   />
                 </Form.Item>
               </div>
+                </>
+              )}
               <Form.Item
                 label="รูปภาพหรือไฟล์แนบ"
                 className="!mb-0 !mt-1 border-t border-slate-100 !pt-4"
@@ -2599,14 +2920,24 @@ export function ComplaintForm({ record, onSaved }) {
         confirmLoading={saving}
         onOk={submitQa}
         destroyOnHidden
-        width={720}
+        width={isServiceTransport ? 980 : 720}
         centered
       >
         <Alert
           className="!mb-3"
           type="info"
           showIcon
-          message={`PDR: ${record.pdr_no || "-"}`}
+          message={
+            isServiceTransport
+              ? `ประเภท: ${
+                  record.document_scope === "ภายนอก"
+                    ? "ร้องเรียนภายนอก"
+                    : record.document_scope === "ภายใน"
+                      ? "ร้องเรียนภายใน"
+                      : "ยังไม่ระบุ"
+                } · ทะเบียนรถ: ${record.license_plate || "-"}`
+              : `PDR: ${record.pdr_no || "-"}`
+          }
         />
         <ProblemMismatchAlert
           complaint={{
@@ -2619,10 +2950,119 @@ export function ComplaintForm({ record, onSaved }) {
           relatedReject={relatedReject}
         />
         <Form form={qaForm} layout="vertical">
-          <ProblemFormItem
-            options={mergedOptions.problem_name || []}
-            required
-          />
+          {isServiceTransport ? (
+            <>
+              <Alert
+                className="!mb-3"
+                type="info"
+                showIcon
+                message="ข้อมูลตามชีต Excel บริการ/ขนส่ง"
+                description="week / เดือน / ครั้งที่ / ผู้บันทึก คำนวณตอนกดรับเรื่อง — ปัญหาเลือกจาก Master ปัญหา (ขนส่ง)"
+              />
+              <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2 xl:grid-cols-4">
+                <Form.Item name="grade" label="Grade" className="!mb-3">
+                  <Input readOnly className="!bg-slate-50" />
+                </Form.Item>
+                <Form.Item
+                  name="quarter"
+                  label="ไตรมาส"
+                  className="!mb-3"
+                  rules={[{ required: true, message: "กรุณากรอกไตรมาส เช่น Q1" }]}
+                >
+                  <Input placeholder="เช่น Q1" />
+                </Form.Item>
+                <Form.Item name="week_no" label="week" className="!mb-3">
+                  <InputNumber className="!w-full" readOnly controls={false} placeholder="อัตโนมัติ" />
+                </Form.Item>
+                <Form.Item name="month_no" label="เดือน" className="!mb-3">
+                  <InputNumber className="!w-full" readOnly controls={false} placeholder="อัตโนมัติ" />
+                </Form.Item>
+                <Form.Item name="company_name" label="Customer" className="!mb-3">
+                  <Input readOnly className="!bg-slate-50" />
+                </Form.Item>
+                <Form.Item
+                  name="customer_group"
+                  label="Group"
+                  className="!mb-3"
+                  rules={[{ required: true, message: "กรุณาเลือก Group" }]}
+                >
+                  <Select
+                    options={CUSTOMER_GROUP_OPTIONS}
+                    placeholder="เลือก Group"
+                    allowClear
+                  />
+                </Form.Item>
+                <Form.Item name="sale_cs_staff" label="Sale / CS" className="!mb-3">
+                  <Input readOnly className="!bg-slate-50" />
+                </Form.Item>
+                <Form.Item name="team" label="Team" className="!mb-3">
+                  <Input placeholder="กรอก Team" />
+                </Form.Item>
+                <Form.Item name="channel" label="channel" className="!mb-3">
+                  <Input placeholder={DEFAULT_CHANNEL} />
+                </Form.Item>
+                <Form.Item name="agency" label="หน่วยงาน" className="!mb-3">
+                  <Input placeholder={DEFAULT_AGENCY} />
+                </Form.Item>
+                <Form.Item
+                  name="issue_type"
+                  label="ประเภท"
+                  className="!mb-3"
+                  rules={[{ required: true, message: "กรุณาเลือกประเภท" }]}
+                >
+                  <Select options={ISSUE_TYPE_OPTIONS} placeholder="Men / Method" />
+                </Form.Item>
+                <Form.Item name="occurrence_no" label="ครั้งที่" className="!mb-3">
+                  <InputNumber className="!w-full" readOnly controls={false} placeholder="อัตโนมัติ" />
+                </Form.Item>
+                <Form.Item name="license_plate" label="ทะเบียนรถ" className="!mb-3">
+                  <Input readOnly className="!bg-slate-50" />
+                </Form.Item>
+                <Form.Item
+                  name="sup_car"
+                  label="SUP CAR"
+                  className="!mb-3"
+                  rules={[{ required: true, message: "กรุณาเลือก SUP CAR" }]}
+                >
+                  <Select options={SUP_CAR_OPTIONS} placeholder="เลือก SUP CAR" />
+                </Form.Item>
+                <Form.Item name="lts_ack_date" label="LTS รับทราบ" className="!mb-3">
+                  <DatePicker className="w-full" format="DD/MM/YYYY" />
+                </Form.Item>
+                <Form.Item name="qa_accepted_by_name" label="ผู้บันทึก" className="!mb-3">
+                  <Input readOnly className="!bg-slate-50" placeholder="คนที่กดรับเรื่อง" />
+                </Form.Item>
+              </div>
+              <Form.Item
+                name="transport_problem"
+                label="ปัญหา"
+                className="!mb-3"
+                rules={[{ required: true, message: "กรุณาเลือกปัญหา" }]}
+                extra="จาก Master ปัญหา (ขนส่ง) — รวมภายใน+ภายนอก เลือกได้อิสระ"
+              >
+                <Select
+                  showSearch
+                  allowClear
+                  optionFilterProp="label"
+                  placeholder="ค้นหา / เลือกปัญหา"
+                  options={mergedOptions.transport_problem || []}
+                />
+              </Form.Item>
+              <Form.Item
+                name="qa_cause"
+                label="สาเหตุ"
+                className="!mb-3"
+                extra="กรอกได้ หรือเว้นว่าง"
+              >
+                <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} placeholder="ไม่บังคับ" />
+              </Form.Item>
+            </>
+          ) : (
+            <ProblemFormItem
+              options={mergedOptions.problem_name || []}
+              required
+            />
+          )}
           <Form.Item
             name="document_accepted"
             label="เอกสาร Action plan"
@@ -2638,14 +3078,16 @@ export function ComplaintForm({ record, onSaved }) {
           </Form.Item>
           {qaDocumentAccepted === "P" ? (
             <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
-              <Form.Item
-                name="document_scope"
-                label="เอกสารภายใน/ภายนอก"
-                className="!mb-3"
-                rules={[{ required: true, message: "กรุณาเลือกเอกสารภายในหรือภายนอก" }]}
-              >
-                <DocumentScopeCheckbox />
-              </Form.Item>
+              {isServiceTransport ? null : (
+                <Form.Item
+                  name="document_scope"
+                  label="เอกสารภายใน/ภายนอก"
+                  className="!mb-3"
+                  rules={[{ required: true, message: "กรุณาเลือกเอกสารภายในหรือภายนอก" }]}
+                >
+                  <DocumentScopeCheckbox />
+                </Form.Item>
+              )}
               <Form.Item
                 name="document_no"
                 label="เลขที่เอกสาร"
