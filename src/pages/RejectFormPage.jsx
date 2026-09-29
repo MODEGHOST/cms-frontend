@@ -7,6 +7,7 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { erpApi, rejectApi } from "../services/api";
 import { buildErpDraftRecord } from "../utils/mapErpPdr";
 import { formatDate } from "../utils/datetime";
+import { cacheInvalidate } from "../utils/dashboardCache";
 
 const RESULT_COLUMNS = [
   { title: "PDR", dataIndex: "pdr_no" },
@@ -99,6 +100,7 @@ export function RejectFormPage() {
   }, [searchParams]);
 
   const updateRecord = (updated) => {
+    cacheInvalidate("reject");
     setSelectedRecord(updated);
     setRecords((previous) => {
       if (!previous.length) return updated ? [updated] : [];
@@ -118,6 +120,7 @@ export function RejectFormPage() {
   };
 
   const handleReturned = (returned) => {
+    cacheInvalidate("reject");
     const returnedId = Number(returned?.id);
     setSelectedRecord(null);
     setRecords((previous) =>

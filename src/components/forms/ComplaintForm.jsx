@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   Checkbox,
+  ConfigProvider,
   DatePicker,
   Form,
   Image,
@@ -126,6 +127,31 @@ function DocumentScopeCheckbox({ value, onChange }) {
   );
 }
 
+function normalizeShiftChoice(value) {
+  const text = String(value || "").trim().toUpperCase();
+  return text === "A" || text === "B" ? text : null;
+}
+
+function ShiftCheckbox({ value, onChange }) {
+  const current = normalizeShiftChoice(value);
+  return (
+    <Space size="middle" wrap>
+      <Checkbox
+        checked={current === "A"}
+        onChange={(event) => onChange?.(event.target.checked ? "A" : null)}
+      >
+        A
+      </Checkbox>
+      <Checkbox
+        checked={current === "B"}
+        onChange={(event) => onChange?.(event.target.checked ? "B" : null)}
+      >
+        B
+      </Checkbox>
+    </Space>
+  );
+}
+
 function needsDepartmentStep(documentAccepted) {
   return String(documentAccepted || "").toUpperCase() !== "O";
 }
@@ -201,6 +227,7 @@ function canQaEdit(status, user) {
 }
 
 function canDepartmentEdit(status, user, record) {
+  if (!needsDepartmentStep(record?.document_accepted)) return false;
   if (status === "department_action") {
     return (
       isResponsibleDepartmentUser(user, record) ||
@@ -2031,6 +2058,7 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
     } else {
       qaForm.setFieldsValue({
         problem_name: problemNamesOf(record),
+        shift: normalizeShiftChoice(record.shift),
         reported_by_department_name: defaultReportedBy,
         responsible_department_name: record.responsible_department_name || null,
         document_accepted: accepted,
@@ -2052,9 +2080,10 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
         return;
       }
       setSaving(true);
+      const revising = status === "qa_confirm";
       const payload = isServiceTransport
         ? {
-            action: "submit",
+            action: revising ? "save" : "submit",
             grade: values.grade || null,
             quarter: values.quarter || null,
             week_no: values.week_no ?? null,
@@ -2083,8 +2112,9 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
             document_no: isP ? values.document_no || null : null,
           }
         : {
-            action: "submit",
+            action: revising ? "save" : "submit",
             ...problemSaveFields(values.problem_name),
+            shift: normalizeShiftChoice(values.shift),
             reported_by_department_name:
               values.reported_by_department_name ||
               defaultReportedByDepartmentName(
@@ -2097,11 +2127,15 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
             document_no: isP ? values.document_no || null : null,
           };
       const result = await complaintApi.update(record.id, payload);
-      const nextIsDepartment = needsDepartmentStep(values.document_accepted);
+      const switchingToDepartment =
+        needsDepartmentStep(values.document_accepted) &&
+        (!revising || !needsDepartmentStep(record.document_accepted));
       message.success(
-        nextIsDepartment
-          ? `บันทึกข้อมูล QA แล้ว — รอ ${values.responsible_department_name || "หน่วยงาน"} รับเรื่อง`
-          : "บันทึกข้อมูล QA แล้ว — สถานะ O (ไม่รับเอกสาร) ข้ามหน่วยงาน ไป QA Confirm",
+        revising && !switchingToDepartment
+          ? "บันทึกการแก้ไขข้อมูล QA แล้ว"
+          : switchingToDepartment
+            ? `บันทึกข้อมูล QA แล้ว — รอ ${values.responsible_department_name || "หน่วยงาน"} รับเรื่อง`
+            : "บันทึกข้อมูล QA แล้ว — สถานะ O (ไม่รับเอกสาร) ข้ามหน่วยงาน ไป QA Confirm",
       );
       setQaModalOpen(false);
       onSaved?.(result.data);
@@ -2117,6 +2151,7 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
       problem_name: problemNamesOf(record),
       ng_qty: record.ng_qty == null ? null : Number(record.ng_qty),
       cs_remark: record.cs_remark || "",
+      document_accepted: record.document_accepted || null,
       repair_flag: record.repair_flag || "no_repair",
     });
     setFileList(toUploadFileList(splitAttachments(record.attachments || []).files));
@@ -2133,6 +2168,7 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
         values.ng_qty == null || values.ng_qty === "" ? "" : String(values.ng_qty),
       );
       data.append("cs_remark", values.cs_remark || "");
+      data.append("document_accepted", values.document_accepted || "");
       data.append("repair_flag", values.repair_flag || "no_repair");
       buildAttachmentFormData(
         data,
@@ -2141,16 +2177,23 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
       );
       setSaving(true);
       const result = await complaintApi.submitQa(record.id, data);
+      const nextStatus = result?.data?.workflow_status;
+      const savedText =
+        nextStatus === "qa_review"
+          ? "เปลี่ยนเป็นรับเอกสารแล้ว — กลับไปขั้น QA เพื่อกรอกเลขที่เอกสาร แล้วส่งหน่วยงาน"
+          : nextStatus === "pending_department"
+            ? "เปลี่ยนเป็นรับเอกสารแล้ว — รอหน่วยงานรับเรื่อง"
+            : nextStatus === "qa_confirm" && status !== "qa_confirm"
+              ? "เปลี่ยนเป็นไม่รับเอกสารแล้ว — ข้ามหน่วยงานไป QA Confirm"
+              : "บันทึกข้อมูลที่ CS กรอกแล้ว";
       if (result?.reject?.error) {
-        message.warning(
-          `บันทึกข้อมูล CS แล้ว แต่สร้าง Reject ไม่สำเร็จ: ${result.reject.error}`,
-        );
+        message.warning(`${savedText} แต่สร้าง Reject ไม่สำเร็จ: ${result.reject.error}`);
       } else if (result?.reject?.created) {
-        message.success("บันทึกข้อมูลที่ CS กรอกแล้ว — ส่งรายการ Reject ให้ QC แล้ว");
+        message.success(`${savedText} — ส่งรายการ Reject ให้ QC แล้ว`);
       } else if (result?.reject && !result.reject.created) {
-        message.success("บันทึกข้อมูลที่ CS กรอกแล้ว (มีรายการ Reject จาก Complaint นี้อยู่แล้ว)");
+        message.success(`${savedText} (มีรายการ Reject จาก Complaint นี้อยู่แล้ว)`);
       } else {
-        message.success("บันทึกข้อมูลที่ CS กรอกแล้ว");
+        message.success(savedText);
       }
       setQaCsModalOpen(false);
       setFileList((prev) => {
@@ -2415,8 +2458,8 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
     }
     if (status === "qa_confirm" && permitted) {
       return documentAcceptedP
-        ? "ถึง Step QA Confirm — แก้ไขสาเหตุ/แก้ไข/ป้องกัน/หมายเหตุ ได้ถ้าต้องการ แล้วกดยืนยันเพื่อปิดงาน"
-        : "ถึง Step QA Confirm — ไม่รับเอกสาร จึงไม่ต้องแก้สาเหตุ/แก้ไข/ป้องกัน กดยืนยันเพื่อปิดงานได้เลย";
+        ? "ถึง Step QA Confirm — ยังแก้ไขข้อมูลที่ QA กรอกไว้ได้ รวมถึงสาเหตุ/แก้ไข/ป้องกัน แล้วกดยืนยันเพื่อปิดงาน"
+        : "ถึง Step QA Confirm — ยังแก้ไขข้อมูลที่ QA กรอกไว้ได้ เช่น กะ และเอกสาร แล้วกดยืนยันเพื่อปิดงาน";
     }
     if (permitted) {
       return `ช่อง * คือข้อมูลที่ ${String(user?.department || "บัญชีนี้")} ต้องกรอก`;
@@ -2475,8 +2518,9 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
         ) : null}
       </Card>
 
-      <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <Alert
+          className="!w-fit max-w-full"
           showIcon
           type={
             status === "completed"
@@ -2489,7 +2533,8 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
           }
           message={alertMessage}
         />
-        <Space wrap>
+        <ConfigProvider componentSize="small">
+        <Space size={8} className="shrink-0" wrap={false}>
           {csEditable ? (
             <Button type="primary" icon={<EditOutlined />} onClick={openCsModal}>
               {status === "pending_qa" ? "แก้ไขข้อมูล Complaint" : "กรอกข้อมูล Complaint"}
@@ -2516,7 +2561,7 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
           status !== "pending_qa" &&
           !qaEditable ? (
             <Button icon={<EditOutlined />} onClick={openQaCsModal}>
-              แก้ไขปัญหา
+              แก้ไขข้อมูลที่ CS กรอก
             </Button>
           ) : null}
           {qaEditable ? (
@@ -2543,6 +2588,11 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
           ) : null}
           {permitted && status === "qa_confirm" ? (
             <>
+              {isQaUser(user) || isCmsAdmin(user) ? (
+                <Button icon={<EditOutlined />} onClick={openQaModal}>
+                  แก้ไขข้อมูลที่ QA กรอก
+                </Button>
+              ) : null}
               {documentAcceptedP ? (
                 <Button icon={<EditOutlined />} onClick={openQaConfirmModal}>
                   แก้ไขสาเหตุ / แก้ไข / ป้องกัน
@@ -2589,6 +2639,7 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
             </Button>
           ) : null}
         </Space>
+        </ConfigProvider>
       </div>
 
       <ProblemMismatchAlert
@@ -2912,9 +2963,15 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
         open={qaModalOpen}
         onCancel={() => !saving && setQaModalOpen(false)}
         okText={
-          needsDepartmentStep(qaDocumentAccepted ?? record.document_accepted)
-            ? "บันทึกและส่งรอหน่วยงานรับเรื่อง"
-            : "บันทึกและส่ง QA Confirm (ไม่รับเอกสาร)"
+          status === "qa_confirm" &&
+          !(
+            needsDepartmentStep(qaDocumentAccepted ?? record.document_accepted) &&
+            !needsDepartmentStep(record.document_accepted)
+          )
+            ? "บันทึกการแก้ไข"
+            : needsDepartmentStep(qaDocumentAccepted ?? record.document_accepted)
+              ? "บันทึกและส่งรอหน่วยงานรับเรื่อง"
+              : "บันทึกและส่ง QA Confirm (ไม่รับเอกสาร)"
         }
         cancelText="ยกเลิก"
         confirmLoading={saving}
@@ -3063,6 +3120,16 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
               required
             />
           )}
+          {isServiceTransport ? null : (
+            <Form.Item
+              name="shift"
+              label="กะ"
+              className="!mb-3"
+              extra="เลือก A หรือ B ได้อย่างใดอย่างหนึ่ง"
+            >
+              <ShiftCheckbox />
+            </Form.Item>
+          )}
           <Form.Item
             name="document_accepted"
             label="เอกสาร Action plan"
@@ -3155,7 +3222,7 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
           type="info"
           showIcon
           message={`PDR: ${record.pdr_no || "-"}`}
-          description="แก้เฉพาะข้อมูลที่ CS กรอกมา — วันที่รับเรื่องแก้ได้เฉพาะ CS"
+          description="แก้ข้อมูลที่ CS กรอกมาได้ รวมถึงรับหรือไม่รับเอกสาร Action plan — วันที่รับเรื่องแก้ได้เฉพาะ CS"
         />
         <ProblemMismatchAlert
           complaint={{
@@ -3202,6 +3269,19 @@ export function ComplaintForm({ record, onSaved, kind: kindProp }) {
               />
             </Form.Item>
           </div>
+          <Form.Item
+            name="document_accepted"
+            label="เอกสาร Action plan"
+            className="!mb-3"
+            rules={[{ required: true, message: "กรุณาเลือกรับหรือไม่รับเอกสาร" }]}
+            extra="QA เปลี่ยนจากที่ CS เลือกได้ — ถ้ารับเอกสาร จะมีขั้นตอนหน่วยงาน"
+          >
+            <Radio.Group
+              optionType="button"
+              buttonStyle="solid"
+              options={DOCUMENT_ACCEPTED_OPTIONS}
+            />
+          </Form.Item>
           <Form.Item
             name="repair_flag"
             label="Complaint แจ้งซ่อม"

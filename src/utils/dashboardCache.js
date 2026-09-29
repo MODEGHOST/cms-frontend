@@ -1,8 +1,6 @@
-/** Short-lived in-memory cache so repeated dashboard/modal requests skip the network. */
-
 const store = new Map();
 const inflight = new Map();
-const DEFAULT_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_TTL_MS = 90 * 1000;
 const MAX_ENTRIES = 80;
 
 function pruneExpired(now = Date.now()) {
@@ -17,6 +15,14 @@ function evictOldestIfNeeded() {
     if (oldest == null) break;
     store.delete(oldest);
   }
+}
+
+function matchesPrefix(key, prefix) {
+  return (
+    key === prefix ||
+    key.startsWith(`${prefix}:`) ||
+    key.startsWith(`${prefix}-`)
+  );
 }
 
 export function cacheKey(prefix, params = {}) {
@@ -39,6 +45,17 @@ export function cacheSet(key, value, ttlMs = DEFAULT_TTL_MS) {
   store.set(key, { value, expires: now + ttlMs });
   evictOldestIfNeeded();
   return value;
+}
+
+export function cacheInvalidate(prefix) {
+  const needle = String(prefix || "").trim();
+  if (!needle) return;
+  for (const key of [...store.keys()]) {
+    if (matchesPrefix(key, needle)) store.delete(key);
+  }
+  for (const key of [...inflight.keys()]) {
+    if (matchesPrefix(key, needle)) inflight.delete(key);
+  }
 }
 
 export function cacheGetOrSet(key, loader, ttlMs = DEFAULT_TTL_MS) {

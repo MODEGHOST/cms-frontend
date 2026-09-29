@@ -1,4 +1,3 @@
-/** Matches Excel sheets: ร้องเรียนภายใน / ร้องเรียนภายนอก */
 export const SERVICE_SCOPE_INTERNAL = "ภายใน";
 export const SERVICE_SCOPE_EXTERNAL = "ภายนอก";
 
@@ -7,7 +6,6 @@ export const SERVICE_SCOPE_OPTIONS = [
   { value: SERVICE_SCOPE_EXTERNAL, label: "ร้องเรียนภายนอก" },
 ];
 
-/** Excel Group column */
 export const CUSTOMER_GROUP_OPTIONS = [
   { value: "GOLD", label: "GOLD" },
   { value: "Standard", label: "Standard" },
@@ -17,13 +15,11 @@ export const CUSTOMER_GROUP_OPTIONS = [
   { value: "-", label: "-" },
 ];
 
-/** Excel ประเภท */
 export const ISSUE_TYPE_OPTIONS = [
   { value: "Men", label: "Men" },
   { value: "Method", label: "Method" },
 ];
 
-/** Excel SUP CAR */
 export const SUP_CAR_OPTIONS = [
   { value: "LTS", label: "LTS" },
   { value: "ดาวไสวพิเศษ", label: "ดาวไสวพิเศษ" },
@@ -64,7 +60,6 @@ export function serviceTransportFormPath({ scope, id } = {}) {
   return query ? `/service-transport-form?${query}` : "/service-transport-form";
 }
 
-/** Sidebar selectedKey — pathname only (scope lives on page tabs, not menu). */
 export function serviceTransportNavKey(pathname) {
   return pathname;
 }

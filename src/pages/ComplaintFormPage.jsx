@@ -8,6 +8,7 @@ import { COMPLAINT_WORKFLOW_LABELS } from "../constants/complaintWorkflow";
 import { complaintApi, erpApi } from "../services/api";
 import { buildErpDraftRecord } from "../utils/mapErpPdr";
 import { formatDate } from "../utils/datetime";
+import { cacheInvalidate } from "../utils/dashboardCache";
 
 const RESULT_COLUMNS = [
   { title: "PDR", dataIndex: "pdr_no" },
@@ -97,6 +98,7 @@ export function ComplaintFormPage() {
   }, [searchParams]);
 
   const updateRecord = (updated) => {
+    cacheInvalidate("complaint");
     setSelectedRecord(updated);
     setRecords((previous) => {
       if (!previous.length) return updated ? [updated] : [];

@@ -13,6 +13,7 @@ import {
   SERVICE_SCOPE_EXTERNAL,
   SERVICE_SCOPE_INTERNAL,
 } from "../constants/serviceTransport";
+import { cacheInvalidate } from "../utils/dashboardCache";
 
 function emptyDraft(scope) {
   return {
@@ -98,6 +99,7 @@ export function ServiceTransportFormPage() {
   };
 
   const onSaved = (updated) => {
+    cacheInvalidate("complaint");
     setRecord(updated);
     if (updated?.id) {
       const nextScope =

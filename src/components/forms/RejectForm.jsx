@@ -32,7 +32,6 @@ import {
 import { ProblemChips, ProblemFormItem } from "./ProblemField";
 import { RejectPdfDocuments } from "./RejectPdfDocuments";
 
-/** Fields that QC department must fill (Excel column mapping). */
 export const QC_REQUIRED_FIELDS = new Set([
   "doc_notify_date",
   "reject_received_date",
@@ -54,6 +53,24 @@ export const QC_REQUIRED_FIELDS = new Set([
   "remark",
 ]);
 
+const POST_CLAIM_QTY_FIELDS = [
+  "sort_claim_sup_qty",
+  "destroy_bl_qty",
+  "return_to_customer_qty",
+];
+const CLAIM_SYNC_FIELDS = new Set(["claim_sheet_qty", ...POST_CLAIM_QTY_FIELDS]);
+const CLAIM_CAPPED_QTY_FIELDS = new Set(POST_CLAIM_QTY_FIELDS);
+const NUMERIC_FORM_FIELDS = new Set([
+  "claim_sheet_qty",
+  "sort_claim_sup_qty",
+  "return_to_customer_qty",
+  "return_amount",
+  "return_kg",
+  "destroy_bl_qty",
+  "destroy_bl_weight",
+  "destroy_bl_amount",
+]);
+
 const SECTIONS = [
   {
     title: "ข้อมูลเอกสาร ลูกค้า และวันที่",
@@ -69,7 +86,6 @@ const SECTIONS = [
       ["reject_received_date", "รับ Reject", "date"],
       ["customer_ship_date", "วันที่ส่งลูกค้า", "date"],
       ["production_date", "วันที่ผลิต", "date"],
-      // repair_date ซ่อนจาก UI — ยังเก็บใน DB / import ตามเดิม
     ],
   },
   {
@@ -147,11 +163,57 @@ function roundCalc(value, digits = 2) {
   return Math.round(value * factor) / factor;
 }
 
-/** รวมน้ำหนักเคลม / จำนวนเงิน จากจำนวนแผ่นเล็ก × น้ำหนักหรือราคา/แผ่น (จาก ERP) */
+function orZero(qty) {
+  return qty == null ? 0 : qty;
+}
+
+function sheetRatesOf(record) {
+  return {
+    weightPerSheet: toNum(record?.weight_per_sheet),
+    pricePerSheet: toNum(record?.price_per_sheet),
+  };
+}
+
+function clampToRemaining(qty, reserved, claimQty) {
+  if (qty == null) return null;
+  let next = Math.max(0, qty);
+  if (claimQty != null) {
+    next = Math.min(next, Math.max(0, claimQty - orZero(reserved)));
+  }
+  return next;
+}
+
+function syncClaimSplit(updates, {
+  primaryKey,
+  primaryQty,
+  remainderKey,
+  reservedQty,
+  claimQty,
+}) {
+  if (primaryQty == null) return null;
+
+  const clamped = clampToRemaining(primaryQty, reservedQty, claimQty);
+  let nextPrimary = primaryQty;
+  if (clamped !== primaryQty) {
+    nextPrimary = clamped;
+    updates[primaryKey] = nextPrimary;
+  }
+
+  if (claimQty == null) {
+    return { primaryQty: nextPrimary };
+  }
+
+  const remainderQty = Math.max(
+    0,
+    claimQty - orZero(nextPrimary) - orZero(reservedQty),
+  );
+  updates[remainderKey] = remainderQty;
+  return { primaryQty: nextPrimary, remainderQty };
+}
+
 function calcClaimTotals(record, claimQty) {
   const updates = {};
-  const weightPerSheet = toNum(record?.weight_per_sheet);
-  const pricePerSheet = toNum(record?.price_per_sheet);
+  const { weightPerSheet, pricePerSheet } = sheetRatesOf(record);
 
   if (claimQty == null) {
     updates.claim_weight_kg = null;
@@ -167,14 +229,7 @@ function calcClaimTotals(record, claimQty) {
   return updates;
 }
 
-/** ทำลาย BL / ส่งคืนลูกค้า — ใช้ราคา/น้ำหนักต่อแผ่นเล็ก (หลังแปลง UOM) */
-function calcPostClaimDisplay(record) {
-  const weightPerSheet = toNum(record?.weight_per_sheet);
-  const pricePerSheet = toNum(record?.price_per_sheet);
-  const destroyQty = toNum(record?.destroy_bl_qty);
-  const returnQty = toNum(record?.return_to_customer_qty);
-  const updates = {};
-
+function applyPostClaimDerived(updates, destroyQty, returnQty, weightPerSheet, pricePerSheet) {
   if (weightPerSheet != null) {
     if (destroyQty != null) {
       updates.destroy_bl_weight = roundCalc(destroyQty * weightPerSheet);
@@ -194,70 +249,60 @@ function calcPostClaimDisplay(record) {
   return updates;
 }
 
-/**
- * Keep post-claim qty/weight/amount in sync with claim data.
- * claim_sheet_qty = sort_claim_sup_qty + destroy_bl_qty + return_to_customer_qty
- * SUP / destroy / return ห้ามเกินจำนวนเคลม และผลรวมต้องเท่ากับเคลม
- */
+function calcPostClaimDisplay(record) {
+  const { weightPerSheet, pricePerSheet } = sheetRatesOf(record);
+  return applyPostClaimDerived(
+    {},
+    toNum(record?.destroy_bl_qty),
+    toNum(record?.return_to_customer_qty),
+    weightPerSheet,
+    pricePerSheet,
+  );
+}
+
 function calcPostClaimFromClaim(record, allValues, changed) {
-  const weightPerSheet = toNum(record?.weight_per_sheet);
-  const pricePerSheet = toNum(record?.price_per_sheet);
-  let claimQty = toNum(allValues.claim_sheet_qty);
+  const { weightPerSheet, pricePerSheet } = sheetRatesOf(record);
+  const claimQty = toNum(allValues.claim_sheet_qty);
   let destroyQty = toNum(allValues.destroy_bl_qty);
   let returnQty = toNum(allValues.return_to_customer_qty);
   let supQty = toNum(allValues.sort_claim_sup_qty);
   const updates = {};
 
-  const n0 = (qty) => (qty == null ? 0 : qty);
-
-  /** Clamp qty to remaining claim after reserved (fields that stay fixed). */
-  const clampToRemaining = (qty, reserved) => {
-    if (qty == null) return null;
-    let next = Math.max(0, qty);
-    if (claimQty != null) {
-      next = Math.min(next, Math.max(0, claimQty - n0(reserved)));
-    }
-    return next;
-  };
-
   if (changed === "destroy_bl_qty") {
-    if (destroyQty != null) {
-      // return จะถูกคำนวณใหม่ — จองเฉพาะ SUP
-      const clamped = clampToRemaining(destroyQty, supQty);
-      if (clamped !== destroyQty) {
-        destroyQty = clamped;
-        updates.destroy_bl_qty = destroyQty;
-      }
-      if (claimQty != null) {
-        returnQty = Math.max(0, claimQty - n0(destroyQty) - n0(supQty));
-        updates.return_to_customer_qty = returnQty;
-      }
+    const synced = syncClaimSplit(updates, {
+      primaryKey: "destroy_bl_qty",
+      primaryQty: destroyQty,
+      remainderKey: "return_to_customer_qty",
+      reservedQty: supQty,
+      claimQty,
+    });
+    if (synced) {
+      destroyQty = synced.primaryQty;
+      if ("remainderQty" in synced) returnQty = synced.remainderQty;
     }
   } else if (changed === "return_to_customer_qty") {
-    if (returnQty != null) {
-      // destroy จะถูกคำนวณใหม่ — จองเฉพาะ SUP
-      const clamped = clampToRemaining(returnQty, supQty);
-      if (clamped !== returnQty) {
-        returnQty = clamped;
-        updates.return_to_customer_qty = returnQty;
-      }
-      if (claimQty != null) {
-        destroyQty = Math.max(0, claimQty - n0(returnQty) - n0(supQty));
-        updates.destroy_bl_qty = destroyQty;
-      }
+    const synced = syncClaimSplit(updates, {
+      primaryKey: "return_to_customer_qty",
+      primaryQty: returnQty,
+      remainderKey: "destroy_bl_qty",
+      reservedQty: supQty,
+      claimQty,
+    });
+    if (synced) {
+      returnQty = synced.primaryQty;
+      if ("remainderQty" in synced) destroyQty = synced.remainderQty;
     }
   } else if (changed === "sort_claim_sup_qty") {
-    if (supQty != null) {
-      // return จะถูกคำนวณใหม่ — จองเฉพาะทำลาย BL
-      const clamped = clampToRemaining(supQty, destroyQty);
-      if (clamped !== supQty) {
-        supQty = clamped;
-        updates.sort_claim_sup_qty = supQty;
-      }
-      if (claimQty != null) {
-        returnQty = Math.max(0, claimQty - n0(destroyQty) - n0(supQty));
-        updates.return_to_customer_qty = returnQty;
-      }
+    const synced = syncClaimSplit(updates, {
+      primaryKey: "sort_claim_sup_qty",
+      primaryQty: supQty,
+      remainderKey: "return_to_customer_qty",
+      reservedQty: destroyQty,
+      claimQty,
+    });
+    if (synced) {
+      supQty = synced.primaryQty;
+      if ("remainderQty" in synced) returnQty = synced.remainderQty;
     }
   } else if (changed === "claim_sheet_qty") {
     Object.assign(updates, calcClaimTotals(record, claimQty));
@@ -267,41 +312,33 @@ function calcPostClaimFromClaim(record, allValues, changed) {
         updates.destroy_bl_qty = destroyQty;
       }
       if (supQty != null) {
-        const maxSup = Math.max(0, claimQty - n0(destroyQty));
-        supQty = Math.min(Math.max(0, supQty), maxSup);
+        supQty = Math.min(
+          Math.max(0, supQty),
+          Math.max(0, claimQty - orZero(destroyQty)),
+        );
         updates.sort_claim_sup_qty = supQty;
       }
-      returnQty = Math.max(0, claimQty - n0(destroyQty) - n0(supQty));
+      returnQty = Math.max(0, claimQty - orZero(destroyQty) - orZero(supQty));
       updates.return_to_customer_qty = returnQty;
     }
   }
 
-  const finalDestroy = "destroy_bl_qty" in updates ? updates.destroy_bl_qty : destroyQty;
+  const finalDestroy =
+    "destroy_bl_qty" in updates ? updates.destroy_bl_qty : destroyQty;
   const finalReturn =
-    "return_to_customer_qty" in updates ? updates.return_to_customer_qty : returnQty;
+    "return_to_customer_qty" in updates
+      ? updates.return_to_customer_qty
+      : returnQty;
 
-  if (weightPerSheet != null) {
-    if (finalDestroy != null) {
-      updates.destroy_bl_weight = roundCalc(finalDestroy * weightPerSheet);
-    }
-    if (finalReturn != null) {
-      updates.return_kg = roundCalc(finalReturn * weightPerSheet);
-    }
-  }
-
-  if (pricePerSheet != null) {
-    if (finalDestroy != null) {
-      updates.destroy_bl_amount = roundCalc(finalDestroy * pricePerSheet);
-    }
-    if (finalReturn != null) {
-      updates.return_amount = roundCalc(finalReturn * pricePerSheet);
-    }
-  }
-
-  return updates;
+  return applyPostClaimDerived(
+    updates,
+    finalDestroy,
+    finalReturn,
+    weightPerSheet,
+    pricePerSheet,
+  );
 }
 
-/** Fields auto-calculated from claim_sheet_qty × ERP weight/price — editable form but read-only UI. */
 const COMPUTED_CLAIM_FIELDS = new Set(["claim_weight_kg", "claim_amount"]);
 
 function toFormValues(record) {
@@ -310,25 +347,13 @@ function toFormValues(record) {
   for (const name of QC_REQUIRED_FIELDS) {
     const value = display?.[name];
     if (name === "doc_notify_date") {
-      // Auto-fill today only when empty; keep existing date otherwise.
       values[name] = value ? dayjs(value) : dayjs();
     } else if (name === "reject_received_date") {
       values[name] = value ? dayjs(value) : null;
     } else if (name === "actual_ship_qty") {
       values[name] =
         value == null || value === "" ? "" : String(Number(value));
-    } else if (
-      [
-        "claim_sheet_qty",
-        "sort_claim_sup_qty",
-        "return_to_customer_qty",
-        "return_amount",
-        "return_kg",
-        "destroy_bl_qty",
-        "destroy_bl_weight",
-        "destroy_bl_amount",
-      ].includes(name)
-    ) {
+    } else if (NUMERIC_FORM_FIELDS.has(name)) {
       values[name] = value == null || value === "" ? null : Number(value);
     } else if (name === "problem_name") {
       values[name] = problemNamesOf(display);
@@ -352,7 +377,6 @@ function toFormValues(record) {
   return values;
 }
 
-/** View-mode: แปลงราคา/แผ่นเล็กจาก UOM ก่อนแสดง แล้วคำนวณจำนวนเงิน/น้ำหนัก */
 function withClaimDisplay(record) {
   if (!record) return record;
   const derivedPrice = deriveSmallSheetPriceFromErp(record);
@@ -377,7 +401,6 @@ function withClaimDisplay(record) {
   };
 }
 
-/** Keep input rows level when labels wrap to 1–2 lines (avoids “wave” alignment). */
 const FIELD_ITEM_CLASS =
   "!mb-3 [&_.ant-form-item-label]:min-h-[2.75rem] [&_.ant-form-item-label]:!pb-1 [&_.ant-form-item-label_>label]:!h-auto [&_.ant-form-item-label_>label]:!whitespace-normal";
 
@@ -472,10 +495,7 @@ function FormField({
   const options = selectOptions[name] || [];
   const claimSheetQty = Form.useWatch("claim_sheet_qty");
   const claimQty = toNum(claimSheetQty);
-  const isClaimCappedQty =
-    name === "destroy_bl_qty" ||
-    name === "return_to_customer_qty" ||
-    name === "sort_claim_sup_qty";
+  const isClaimCappedQty = CLAIM_CAPPED_QTY_FIELDS.has(name);
   const isDecimalField = type === "decimal2";
   const isNumericField = type === "number" || type === "decimal2";
 
@@ -615,7 +635,6 @@ function FormField({
   );
 }
 
-/** Read-only computed claim fields (weight/amount) — still registered so save includes them. */
 function ComputedClaimField({ field, className = "" }) {
   const [name, label, type] = field;
   const isDecimalField = type === "decimal2";
@@ -881,24 +900,14 @@ export function RejectForm({ record, onSaved, onReturned }) {
 
   const handleValuesChange = (changedValues, allValues) => {
     const changed = Object.keys(changedValues)[0];
-    if (
-      ![
-        "claim_sheet_qty",
-        "sort_claim_sup_qty",
-        "destroy_bl_qty",
-        "return_to_customer_qty",
-      ].includes(changed)
-    ) {
-      return;
-    }
+    if (!CLAIM_SYNC_FIELDS.has(changed)) return;
+
     const claimQty = toNum(allValues.claim_sheet_qty);
     const entered = toNum(changedValues[changed]);
     if (
       claimQty != null &&
       entered != null &&
-      (changed === "destroy_bl_qty" ||
-        changed === "return_to_customer_qty" ||
-        changed === "sort_claim_sup_qty") &&
+      CLAIM_CAPPED_QTY_FIELDS.has(changed) &&
       entered > claimQty
     ) {
       message.warning(
